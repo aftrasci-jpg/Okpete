@@ -20,7 +20,8 @@ import {
   ArrowRight,
   LayoutDashboard,
   Sword,
-  Download
+  Download,
+  Archive
 } from 'lucide-react';
 
 // --- Types ---
@@ -40,6 +41,14 @@ interface MatchRecord {
   score: string;
   stake: number;
   date: string;
+}
+
+interface SessionRecord {
+  id: string;
+  name: string;
+  date: string;
+  players: Player[];
+  archive: MatchRecord[];
 }
 
 interface Move {
@@ -75,9 +84,11 @@ export default function App() {
   const [lastDrawScores, setLastDrawScores] = useState({ j1: 0, j2: 0 });
   const [rankingSearch, setRankingSearch] = useState('');
   const [archive, setArchive] = useState<MatchRecord[]>([]);
+  const [sessions, setSessions] = useState<SessionRecord[]>([]);
   const [showNextPrompt, setShowNextPrompt] = useState(false);
   const [victoryState, setVictoryState] = useState<{ show: boolean; name: string; winnerId?: string }>({ show: false, name: '' });
   const [currentKingId, setCurrentKingId] = useState<string | null>(null);
+  const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
   const [showStakePrompt, setShowStakePrompt] = useState(false);
   const [pendingMatchDetails, setPendingMatchDetails] = useState<any>(null);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
@@ -88,11 +99,13 @@ export default function App() {
   useEffect(() => {
     const savedPlayers = localStorage.getItem('scrabble-players');
     const savedArchive = localStorage.getItem('scrabble-archive');
+    const savedSessions = localStorage.getItem('scrabble-sessions');
     if (savedPlayers) {
       const parsed = JSON.parse(savedPlayers);
       setPlayers(parsed);
     }
     if (savedArchive) setArchive(JSON.parse(savedArchive));
+    if (savedSessions) setSessions(JSON.parse(savedSessions));
 
     const handleBeforeInstallPrompt = (e: any) => {
       e.preventDefault();
@@ -112,7 +125,8 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('scrabble-players', JSON.stringify(players));
     localStorage.setItem('scrabble-archive', JSON.stringify(archive));
-  }, [players, archive]);
+    localStorage.setItem('scrabble-sessions', JSON.stringify(sessions));
+  }, [players, archive, sessions]);
 
   const addPlayer = () => {
     if (!nameInput.trim()) return;
@@ -136,14 +150,26 @@ export default function App() {
     setPlayers(players.map(p => p.id === id ? { ...p, active: !p.active } : p));
   };
 
-  const startTournament = () => {
+  const startTournament = (forceNew: boolean = false) => {
     const active = players.filter(p => p.active);
     if (active.length < 2) {
       alert("Pas assez de joueurs actifs (minimum 2)");
       return;
     }
+
+    const hasData = archive.length > 0 || players.some(p => p.earnings !== 0);
     
-    // First match is 0 vs 1
+    if (hasData && forceNew) {
+      setShowArchiveConfirm(true);
+      return;
+    }
+    
+    // Normal start or resume - if match exists, just go there
+    if (currentMatch && !forceNew) {
+      setActiveView('match');
+      return;
+    }
+
     const j1 = active[0];
     const j2 = active[1];
     
@@ -154,6 +180,42 @@ export default function App() {
       isInitial: true
     });
     setShowStakePrompt(true);
+  };
+
+  const confirmArchiveAndNew = () => {
+    const newSession: SessionRecord = {
+      id: Math.random().toString(36).substr(2, 9),
+      name: `Session ${sessions.length + 1}`,
+      date: new Date().toLocaleString(),
+      players: [...players],
+      archive: [...archive]
+    };
+    
+    setSessions([newSession, ...sessions]);
+    setArchive([]);
+    stopAlertLoop();
+    
+    // Reset all player stats but keep the players list
+    const resetPlayers = players.map(p => ({
+      ...p,
+      wins: 0,
+      losses: 0,
+      earnings: 0
+    }));
+    
+    setPlayers(resetPlayers);
+    setCurrentIndex(0);
+    setCurrentKingId(null);
+    setCurrentMatch(null);
+    setPendingMatchDetails(null);
+    setShowArchiveConfirm(false);
+    setActiveView('players'); // Stay on players page to allow management
+  };
+
+  const deleteSession = (id: string) => {
+    if (confirm("Supprimer cette archive définitivement ?")) {
+      setSessions(sessions.filter(s => s.id !== id));
+    }
   };
 
   const confirmStakeAndStart = (matchStake: number) => {
@@ -475,6 +537,45 @@ export default function App() {
         </div>
       </header>
 
+      {/* Archive Confirmation Modal */}
+      <AnimatePresence>
+        {showArchiveConfirm && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white dark:bg-slate-800 rounded-3xl p-6 w-full max-w-sm shadow-2xl space-y-6"
+            >
+              <div className="text-center space-y-2">
+                <div className="w-16 h-16 bg-red-50 dark:bg-red-900/20 rounded-full flex items-center justify-center text-red-500 mx-auto">
+                  <Archive className="w-8 h-8" />
+                </div>
+                <h3 className="text-xl font-display font-bold">Nouvelle session ?</h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  La session actuelle sera archivée et tous les scores seront remis à zéro.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3">
+                <button
+                  onClick={confirmArchiveAndNew}
+                  className="w-full bg-red-500 text-white py-4 rounded-2xl font-black uppercase tracking-widest shadow-lg shadow-red-500/20"
+                >
+                  Confirmer et archiver
+                </button>
+                <button
+                  onClick={() => setShowArchiveConfirm(false)}
+                  className="w-full bg-slate-100 text-slate-600 py-3 rounded-2xl font-bold uppercase tracking-widest text-xs"
+                >
+                  Annuler
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* Stake Adjustment Modal */}
       <AnimatePresence>
         {showStakePrompt && (
@@ -536,6 +637,7 @@ export default function App() {
               currentKingId={currentKingId}
               isInstallable={isInstallable}
               handleInstallApp={handleInstallApp}
+              archive={archive}
             />
           )}
 
@@ -574,7 +676,11 @@ export default function App() {
           )}
 
           {activeView === 'history' && (
-            <HistoryPage archive={archive} />
+            <HistoryPage 
+              archive={archive} 
+              sessions={sessions} 
+              onDeleteSession={deleteSession}
+            />
           )}
         </AnimatePresence>
       </main>
@@ -697,8 +803,10 @@ const pageTransition = {
 // 1. Players Module
 function PlayersPage({ 
   players, nameInput, setNameInput, addPlayer, togglePlayerActive, removePlayer, startTournament, stake, setStake, currentKingId,
-  isInstallable, handleInstallApp
+  isInstallable, handleInstallApp, archive
 }: any) {
+  const hasCurrentSessionData = archive.length > 0 || players.some((p: any) => p.earnings !== 0);
+
   return (
     <motion.div {...pageTransition} className="space-y-6">
       {isInstallable && (
@@ -788,13 +896,25 @@ function PlayersPage({
           </p>
         </div>
 
-        <button 
-          onClick={startTournament}
-          className="w-full flex items-center justify-center gap-2 bg-secondary py-4 rounded-2xl text-white font-black uppercase tracking-widest hover:brightness-105 active:scale-95 transition-all shadow-lg"
-        >
-          <Play className="w-5 h-5 fill-current" />
-          Lancer la Partie
-        </button>
+        <div className="flex flex-col gap-3">
+          {hasCurrentSessionData && (
+            <button 
+              onClick={() => startTournament(false)}
+              className="w-full flex items-center justify-center gap-2 bg-secondary py-4 rounded-2xl text-white font-black uppercase tracking-widest hover:brightness-105 active:scale-95 transition-all shadow-lg"
+            >
+              <Play className="w-5 h-5 fill-current" />
+              Reprendre la partie
+            </button>
+          )}
+
+          <button 
+            onClick={() => startTournament(hasCurrentSessionData)}
+            className={`w-full flex items-center justify-center gap-2 py-4 rounded-2xl text-white font-black uppercase tracking-widest hover:brightness-105 active:scale-95 transition-all shadow-lg ${hasCurrentSessionData ? 'bg-indigo-600' : 'bg-secondary'}`}
+          >
+            {hasCurrentSessionData ? <Plus className="w-5 h-5" /> : <Play className="w-5 h-5 fill-current" />}
+            {hasCurrentSessionData ? 'Nouvelle Session' : 'Lancer la Partie'}
+          </button>
+        </div>
       </section>
     </motion.div>
   );
@@ -1233,9 +1353,12 @@ function RankingPage({ players, rankingSearch, setRankingSearch }: { players: Pl
 }
 
 // 4. History Module
-function HistoryPage({ archive }: any) {
+function HistoryPage({ archive, sessions, onDeleteSession }: any) {
+  const [sessionDetail, setSessionDetail] = useState<SessionRecord | null>(null);
+
   return (
     <motion.div {...pageTransition} className="space-y-6">
+      {/* Current Duel Archive */}
       <section className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
         <div className="flex items-center gap-2 mb-6">
           <HistoryIcon className="w-5 h-5 text-slate-400" />
@@ -1265,10 +1388,106 @@ function HistoryPage({ archive }: any) {
             </div>
           ))}
           {archive.length === 0 && (
-            <div className="text-center py-20 text-slate-300 italic">L&apos;histoire s&apos;écrit maintenant...</div>
+            <div className="text-center py-10 text-slate-300 italic text-sm">L&apos;histoire s&apos;écrit maintenant...</div>
           )}
         </div>
       </section>
+
+      {/* Archived Sessions */}
+      {sessions.length > 0 && (
+        <section className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+          <div className="flex items-center gap-2 mb-6">
+            <Trophy className="w-5 h-5 text-yellow-500" />
+            <h2 className="text-xl font-display">Sessions Archivées</h2>
+          </div>
+
+          <div className="space-y-3">
+            {sessions.map((session: SessionRecord) => (
+              <div key={session.id} className="bg-slate-50 border border-slate-100 rounded-2xl p-4 transition-all hover:bg-white hover:shadow-md">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="space-y-0.5">
+                    <h3 className="font-bold text-slate-900">{session.name}</h3>
+                    <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">{session.date}</p>
+                  </div>
+                  <button 
+                    onClick={() => onDeleteSession(session.id)}
+                    className="p-2 text-red-300 hover:text-red-500 transition-colors"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-slate-500">{session.archive.length} matchs joués</span>
+                  <button 
+                    onClick={() => setSessionDetail(session)}
+                    className="text-primary font-black uppercase tracking-widest text-[9px] hover:underline"
+                  >
+                    Voir détails
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Session Details Modal */}
+      <AnimatePresence>
+        {sessionDetail && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white dark:bg-slate-800 rounded-3xl p-6 w-full max-w-lg shadow-2xl space-y-6 max-h-[85vh] overflow-y-auto"
+            >
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-xl font-display font-bold">{sessionDetail.name}</h3>
+                  <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">{sessionDetail.date}</p>
+                </div>
+                <button 
+                  onClick={() => setSessionDetail(null)}
+                  className="p-2 bg-slate-100 rounded-full text-slate-500"
+                >
+                  <XCircle className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b pb-1">Classement Final</h4>
+                <div className="space-y-2">
+                  {sessionDetail.players.sort((a,b) => b.earnings - a.earnings).map((p, i) => (
+                    <div key={p.id} className="flex items-center justify-between py-2 border-b border-slate-50 last:border-0 text-sm">
+                      <div className="flex items-center gap-3">
+                        <span className="w-4 text-slate-300 font-black">{i+1}</span>
+                        <span className="font-bold text-slate-700">{p.name}</span>
+                      </div>
+                      <span className={`font-black ${p.earnings >= 0 ? 'text-primary' : 'text-red-500'}`}>
+                        {p.earnings > 0 ? '+' : ''}{p.earnings.toLocaleString()}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b pb-1 mt-6">Matchs de la session</h4>
+                <div className="space-y-2">
+                  {sessionDetail.archive.map((match, idx) => (
+                    <div key={idx} className="flex items-center justify-between py-2 text-xs border-b border-slate-50 last:border-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold">{match.winner}</span>
+                        <ArrowRight className="w-2 h-2 text-slate-300" />
+                        <span className="text-slate-400">{match.loser}</span>
+                      </div>
+                      <span className="font-mono font-bold text-primary">{match.score}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }
