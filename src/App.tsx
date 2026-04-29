@@ -19,7 +19,8 @@ import {
   XCircle,
   ArrowRight,
   LayoutDashboard,
-  Sword
+  Sword,
+  Download
 } from 'lucide-react';
 
 // --- Types ---
@@ -79,6 +80,8 @@ export default function App() {
   const [currentKingId, setCurrentKingId] = useState<string | null>(null);
   const [showStakePrompt, setShowStakePrompt] = useState(false);
   const [pendingMatchDetails, setPendingMatchDetails] = useState<any>(null);
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [isInstallable, setIsInstallable] = useState(false);
   const alertIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Load from Local Storage on Mount
@@ -91,7 +94,16 @@ export default function App() {
     }
     if (savedArchive) setArchive(JSON.parse(savedArchive));
 
+    const handleBeforeInstallPrompt = (e: any) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setIsInstallable(true);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
     return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
       if (alertIntervalRef.current) clearInterval(alertIntervalRef.current);
     };
   }, []);
@@ -167,6 +179,16 @@ export default function App() {
     setVictoryState({ show: false, name: '' });
     setShowStakePrompt(false);
     setPendingMatchDetails(null);
+  };
+
+  const handleInstallApp = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setIsInstallable(false);
+    }
+    setDeferredPrompt(null);
   };
 
   const setupNextMatch = (index: number, initialStake: number) => {
@@ -512,6 +534,8 @@ export default function App() {
               stake={stake}
               setStake={setStake}
               currentKingId={currentKingId}
+              isInstallable={isInstallable}
+              handleInstallApp={handleInstallApp}
             />
           )}
 
@@ -672,10 +696,30 @@ const pageTransition = {
 
 // 1. Players Module
 function PlayersPage({ 
-  players, nameInput, setNameInput, addPlayer, togglePlayerActive, removePlayer, startTournament, stake, setStake, currentKingId 
+  players, nameInput, setNameInput, addPlayer, togglePlayerActive, removePlayer, startTournament, stake, setStake, currentKingId,
+  isInstallable, handleInstallApp
 }: any) {
   return (
     <motion.div {...pageTransition} className="space-y-6">
+      {isInstallable && (
+        <section className="bg-gradient-to-r from-primary to-green-600 rounded-2xl p-6 text-white shadow-lg shadow-primary/20">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center backdrop-blur-sm">
+              <Download className="w-6 h-6" />
+            </div>
+            <div className="flex-1">
+              <h3 className="font-bold text-lg leading-tight text-white">Installer l&apos;application</h3>
+              <p className="text-white/80 text-xs">Accédez à O&apos;Kpêtê plus rapidement et hors-ligne.</p>
+            </div>
+            <button 
+              onClick={handleInstallApp}
+              className="bg-white text-primary font-black px-4 py-2 rounded-xl text-xs uppercase tracking-widest shadow-sm hover:scale-105 transition-all"
+            >
+              Installer
+            </button>
+          </div>
+        </section>
+      )}
       <section className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
         <div className="flex items-center gap-2 mb-4">
           <Users className="w-5 h-5 text-primary" />
