@@ -33,14 +33,18 @@ interface Player {
   wins: number;
   losses: number;
   earnings: number;
+  wallet: number;
 }
 
 interface MatchRecord {
+  winnerId: string | 'draw';
+  loserId: string | 'draw';
   winner: string;
   loser: string;
   score: string;
   stake: number;
   date: string;
+  externalBets: ExternalBet[];
 }
 
 interface SessionRecord {
@@ -57,6 +61,14 @@ interface Move {
   points: number;
 }
 
+interface ExternalBet {
+  id: string;
+  betterAId: string;
+  betterBId: string;
+  amount: number;
+  betOnPlayerId: string; // The player Better A is backing. Better B backs the other.
+}
+
 interface CountedOut {
   player: 'j1' | 'j2';
   margin: number;
@@ -71,6 +83,7 @@ export default function App() {
   const [players, setPlayers] = useState<Player[]>([]);
   const [nameInput, setNameInput] = useState('');
   const [stake, setStake] = useState(1000);
+
   const [pointsInput, setPointsInput] = useState('');
   const [currentIndex, setCurrentIndex] = useState(0);
   const [currentMatch, setCurrentMatch] = useState<{ j1: Player; j2: Player } | null>(null);
@@ -90,6 +103,9 @@ export default function App() {
   const [currentKingId, setCurrentKingId] = useState<string | null>(null);
   const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
   const [showStakePrompt, setShowStakePrompt] = useState(false);
+  const [currentExternalBets, setCurrentExternalBets] = useState<ExternalBet[]>([]);
+  const [pendingExternalBets, setPendingExternalBets] = useState<ExternalBet[]>([]);
+  const [showRechargeModal, setShowRechargeModal] = useState<{show: boolean, playerId: string, isExternal: boolean}>({show: false, playerId: '', isExternal: false});
   const [pendingMatchDetails, setPendingMatchDetails] = useState<any>(null);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [isInstallable, setIsInstallable] = useState(false);
@@ -137,6 +153,7 @@ export default function App() {
       wins: 0,
       losses: 0,
       earnings: 0,
+      wallet: 5000,
     };
     setPlayers([...players, newPlayer]);
     setNameInput('');
@@ -173,6 +190,7 @@ export default function App() {
     const j1 = active[0];
     const j2 = active[1];
     
+    setPendingExternalBets([]);
     setPendingMatchDetails({
       j1,
       j2,
@@ -200,7 +218,8 @@ export default function App() {
       ...p,
       wins: 0,
       losses: 0,
-      earnings: 0
+      earnings: 0,
+      wallet: 5000
     }));
     
     setPlayers(resetPlayers);
@@ -218,15 +237,91 @@ export default function App() {
     }
   };
 
-  const confirmStakeAndStart = (matchStake: number) => {
+  const rechargeWallet = (id: string, amount: number) => {
+    setPlayers(players.map(p => 
+      p.id === id ? { ...p, wallet: p.wallet + amount, active: p.wallet + amount > 0 ? true : p.active } : p
+    ));
+  };
+
+  const externalBet = (id: string, amount: number) => {
+    setPlayers(players.map(p => {
+      if (p.id === id) {
+        const newWallet = p.wallet - amount;
+        return { 
+          ...p, 
+          wallet: newWallet,
+          earnings: p.earnings - amount,
+          active: newWallet > 0 ? p.active : false 
+        };
+      }
+      return p;
+    }));
+  };
+
+  const confirmStakeAndStart = (matchStake: number, externalBets: ExternalBet[] = []) => {
     if (!pendingMatchDetails) return;
     
     const { j1, j2, nextIdx, isInitial } = pendingMatchDetails;
     
+    // Check match stakes
+    if (j1.wallet < matchStake) {
+      alert(`${j1.name} n'a pas assez de fonds dans son portefeuille.`);
+      return;
+    }
+    if (j2.wallet < matchStake) {
+      alert(`${j2.name} n'a pas assez de fonds dans son portefeuille.`);
+      return;
+    }
+
+    // Check external bets
+    for (const bet of externalBets) {
+      const bA = players.find(p => p.id === bet.betterAId);
+      const bB = players.find(p => p.id === bet.betterBId);
+      
+      const totalRequiredA = (bet.betterAId === j1.id || bet.betterAId === j2.id) ? (matchStake + bet.amount) : bet.amount;
+      const totalRequiredB = (bet.betterBId === j1.id || bet.betterBId === j2.id) ? (matchStake + bet.amount) : bet.amount;
+
+      if (bA && bA.wallet < totalRequiredA) {
+        alert(`${bA.name} n'a pas assez de fonds pour sa mise totale.`);
+        return;
+      }
+      if (bB && bB.wallet < totalRequiredB) {
+        alert(`${bB.name} n'a pas assez de fonds pour sa mise totale.`);
+        return;
+      }
+    }
+
     if (isInitial) {
       setCurrentKingId(null);
     }
     
+    // Deduct match stakes and external bets
+    const updatedPlayers = players.map(p => {
+      let wallet = p.wallet;
+      let earnings = p.earnings;
+
+      // Base match stake
+      if (p.id === j1.id || p.id === j2.id) {
+        wallet -= matchStake;
+        earnings -= matchStake;
+      }
+
+      // Additional external bets
+      externalBets.forEach(bet => {
+        if (bet.betterAId === p.id) {
+          wallet -= bet.amount;
+          earnings -= bet.amount;
+        }
+        if (bet.betterBId === p.id) {
+          wallet -= bet.amount;
+          earnings -= bet.amount;
+        }
+      });
+
+      return { ...p, wallet, earnings, active: wallet > 0 ? p.active : false };
+    });
+
+    setPlayers(updatedPlayers);
     setCurrentIndex(nextIdx);
     setCurrentMatch({ j1, j2 });
     setScores({ j1: 0, j2: 0 });
@@ -234,6 +329,7 @@ export default function App() {
     setMatchMoves([]);
     setCountedOut(null);
     setCurrentMatchStake(matchStake);
+    setCurrentExternalBets(externalBets);
     
     setActiveView('match');
     setShowNextPrompt(false);
@@ -303,12 +399,39 @@ export default function App() {
 
   const endAsDraw = () => {
     setShowReplayPrompt(false);
+    
+    // Refund match stakes and external bets
+    const updatedPlayers = players.map(p => {
+      let wallet = p.wallet;
+      let earnings = p.earnings;
+
+      if (currentMatch && (p.id === currentMatch.j1.id || p.id === currentMatch.j2.id)) {
+        wallet += currentMatchStake;
+        earnings += currentMatchStake;
+      }
+
+      currentExternalBets.forEach(bet => {
+        if (bet.betterAId === p.id || bet.betterBId === p.id) {
+          wallet += bet.amount;
+          earnings += bet.amount;
+        }
+      });
+
+      return { ...p, wallet, earnings };
+    });
+
+    setPlayers(updatedPlayers);
+    setCurrentExternalBets([]);
+
     const record: MatchRecord = {
+      winnerId: 'draw',
+      loserId: 'draw',
       winner: 'Nul',
       loser: 'Nul',
       score: `${lastDrawScores.j1}-${lastDrawScores.j2}`,
       stake: 0,
       date: new Date().toLocaleString(),
+      externalBets: [...currentExternalBets],
     };
     setArchive([record, ...archive]);
     setCurrentMatch(null); // Now we clear the match UI
@@ -452,19 +575,57 @@ export default function App() {
   const endMatch = (winner: Player, loser: Player, finalScores: { j1: number; j2: number }) => {
     stopAlertLoop();
     const updatedPlayers = players.map(p => {
-      if (p.id === winner.id) return { ...p, wins: p.wins + 1, earnings: p.earnings + currentMatchStake };
-      if (p.id === loser.id) return { ...p, losses: p.losses + 1, earnings: p.earnings - currentMatchStake };
-      return p;
+      let earnings = p.earnings;
+      let wallet = p.wallet;
+      let wins = p.wins;
+      let losses = p.losses;
+
+      // Match result
+      if (p.id === winner.id) {
+        wins += 1;
+        earnings += currentMatchStake * 2; // Return stake + profit
+        wallet += currentMatchStake * 2;
+      }
+      if (p.id === loser.id) {
+        losses += 1;
+        // Stake already deducted at start
+      }
+
+      // Resolve external bets
+      currentExternalBets.forEach(bet => {
+        const isBetterAWinner = bet.betOnPlayerId === winner.id;
+        
+        if (p.id === bet.betterAId && isBetterAWinner) {
+          earnings += bet.amount * 2;
+          wallet += bet.amount * 2;
+        } else if (p.id === bet.betterBId && !isBetterAWinner) {
+          earnings += bet.amount * 2;
+          wallet += bet.amount * 2;
+        }
+      });
+
+      return { 
+        ...p, 
+        wins, 
+        losses, 
+        earnings, 
+        wallet, 
+        active: wallet > 0 ? p.active : false 
+      };
     });
 
     setPlayers(updatedPlayers);
+    setCurrentExternalBets([]); // Reset bets
 
     const record: MatchRecord = {
+      winnerId: winner.id,
+      loserId: loser.id,
       winner: winner.name,
       loser: loser.name,
       score: `${finalScores.j1}-${finalScores.j2}`,
       stake: currentMatchStake,
       date: new Date().toLocaleString(),
+      externalBets: [...currentExternalBets],
     };
     setArchive([record, ...archive]);
     setVictoryState({ show: true, name: winner.name, winnerId: winner.id });
@@ -515,6 +676,7 @@ export default function App() {
       nextIdx = (nextIdx + 2) % active.length;
     }
 
+    setPendingExternalBets([]);
     setPendingMatchDetails({ j1: p1, j2: p2, nextIdx, isInitial: false });
     setShowStakePrompt(true);
   };
@@ -579,12 +741,12 @@ export default function App() {
       {/* Stake Adjustment Modal */}
       <AnimatePresence>
         {showStakePrompt && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm overflow-y-auto">
             <motion.div 
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white dark:bg-slate-800 rounded-3xl p-6 w-full max-w-sm shadow-2xl space-y-6"
+              className="bg-white dark:bg-slate-800 rounded-3xl p-6 w-full max-w-sm shadow-2xl space-y-6 my-auto"
             >
               <div className="text-center space-y-2">
                 <div className="w-16 h-16 bg-blue-50 dark:bg-blue-900/20 rounded-full flex items-center justify-center text-primary mx-auto">
@@ -597,31 +759,159 @@ export default function App() {
               </div>
 
               <div className="space-y-3">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-2">Modifier la mise pour ce match</label>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-2">Mise du match (FCFA)</label>
                 <div className="relative">
-                  <Coins className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 dark:text-slate-500" />
+                  <Coins className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                   <input
                     type="number"
                     value={stake}
                     onChange={(e) => setStake(Number(e.target.value))}
-                    className="w-full bg-slate-50 dark:bg-slate-900 border-2 border-slate-100 dark:border-slate-800 rounded-2xl py-4 pl-12 pr-4 font-black text-slate-900 dark:text-slate-100 focus:border-primary focus:ring-0 transition-all text-lg"
+                    className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl py-4 pl-12 pr-4 font-black text-slate-900 focus:border-primary focus:ring-0 transition-all text-lg"
                   />
                 </div>
               </div>
 
-              <button
-                onClick={() => confirmStakeAndStart(stake)}
-                className="w-full bg-primary text-white py-4 rounded-2xl font-black uppercase tracking-widest shadow-lg shadow-primary/20 hover:scale-[1.02] active:scale-95 transition-all"
-              >
-                Lancer le match
-              </button>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between px-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Duels de Paris</label>
+                  <button 
+                    onClick={() => {
+                      const activePlayers = players.filter(p => p.active);
+                      if (activePlayers.length < 2) {
+                        alert("Pas assez de joueurs actifs pour un duel.");
+                        return;
+                      }
+                      
+                      const newBet: ExternalBet = {
+                        id: Math.random().toString(36).substr(2, 9),
+                        betterAId: activePlayers[0].id,
+                        betterBId: activePlayers[1].id,
+                        amount: 500,
+                        betOnPlayerId: pendingMatchDetails?.j1.id
+                      };
+                      setPendingExternalBets([...pendingExternalBets, newBet]);
+                    }}
+                    className="text-[10px] font-black text-primary hover:underline uppercase tracking-widest"
+                  >
+                    + Créer un duel
+                  </button>
+                </div>
+
+                <div className="space-y-3 max-h-52 overflow-y-auto pr-1">
+                  {pendingExternalBets.map((bet) => (
+                    <div key={bet.id} className="bg-slate-50 rounded-xl p-3 border border-slate-100 space-y-3 shadow-inner">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex-1 space-y-1">
+                          <span className="text-[8px] font-black text-slate-400 uppercase">Parieur A</span>
+                          <select 
+                            value={bet.betterAId}
+                            onChange={(e) => {
+                              setPendingExternalBets(pendingExternalBets.map(b => 
+                                b.id === bet.id ? { ...b, betterAId: e.target.value } : b
+                              ));
+                            }}
+                            className="w-full bg-white border border-slate-200 text-[10px] font-black p-1.5 rounded-lg outline-none"
+                          >
+                            {players.filter(p => p.active).map(p => (
+                              <option key={p.id} value={p.id}>{p.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="pt-4">
+                          <span className="text-[9px] font-black text-slate-300">VS</span>
+                        </div>
+                        <div className="flex-1 space-y-1">
+                          <span className="text-[8px] font-black text-slate-400 uppercase">Parieur B</span>
+                          <select 
+                            value={bet.betterBId}
+                            onChange={(e) => {
+                              setPendingExternalBets(pendingExternalBets.map(b => 
+                                b.id === bet.id ? { ...b, betterBId: e.target.value } : b
+                              ));
+                            }}
+                            className="w-full bg-white border border-slate-200 text-[10px] font-black p-1.5 rounded-lg outline-none"
+                          >
+                            {players.filter(p => p.active && p.id !== bet.betterAId).map(p => (
+                              <option key={p.id} value={p.id}>{p.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <button 
+                          onClick={() => setPendingExternalBets(pendingExternalBets.filter(b => b.id !== bet.id))}
+                          className="pt-4 text-red-400 hover:text-red-600"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <span className="text-[8px] font-black text-slate-400 uppercase">Mise (chacun)</span>
+                          <div className="relative">
+                            <input 
+                              type="number"
+                              value={bet.amount}
+                              onChange={(e) => setPendingExternalBets(pendingExternalBets.map(b => 
+                                b.id === bet.id ? { ...b, amount: parseInt(e.target.value) || 0 } : b
+                              ))}
+                              className="w-full bg-white border border-slate-200 rounded-lg py-1.5 px-2 text-[10px] font-black outline-none"
+                            />
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          <span className="text-[8px] font-black text-slate-400 uppercase">A parie sur</span>
+                          <div className="flex bg-white border border-slate-200 rounded-lg p-0.5">
+                            <button 
+                              onClick={() => setPendingExternalBets(pendingExternalBets.map(b => 
+                                b.id === bet.id ? { ...b, betOnPlayerId: pendingMatchDetails?.j1.id } : b
+                              ))}
+                              className={`flex-1 py-1 rounded-md text-[9px] font-black uppercase transition-all ${bet.betOnPlayerId === pendingMatchDetails?.j1.id ? 'bg-primary text-white' : 'text-slate-400'}`}
+                            >
+                              J1
+                            </button>
+                            <button 
+                              onClick={() => setPendingExternalBets(pendingExternalBets.map(b => 
+                                b.id === bet.id ? { ...b, betOnPlayerId: pendingMatchDetails?.j2.id } : b
+                              ))}
+                              className={`flex-1 py-1 rounded-md text-[9px] font-black uppercase transition-all ${bet.betOnPlayerId === pendingMatchDetails?.j2.id ? 'bg-indigo-600 text-white' : 'text-slate-400'}`}
+                            >
+                              J2
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {pendingExternalBets.length === 0 && (
+                    <div className="text-center py-4 text-[10px] text-slate-300 italic">Aucun duel extérieur pour ce match</div>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-2">
+                <button
+                  onClick={() => confirmStakeAndStart(stake, pendingExternalBets)}
+                  className="w-full bg-primary text-white py-4 rounded-2xl font-black uppercase tracking-widest shadow-lg shadow-primary/20 hover:scale-[1.02] active:scale-95 transition-all"
+                >
+                  Confirmer et Lancer
+                </button>
+                <button 
+                  onClick={() => {
+                    setShowStakePrompt(false);
+                    setPendingExternalBets([]);
+                  }}
+                  className="w-full bg-slate-100 text-slate-500 py-3 rounded-2xl font-bold uppercase tracking-widest text-[10px]"
+                >
+                  Annuler
+                </button>
+              </div>
             </motion.div>
           </div>
         )}
       </AnimatePresence>
 
       {/* Main Container */}
-      <main className="flex-1 max-w-xl w-full mx-auto p-4 mb-24 overflow-x-hidden">
+      <main className="flex-1 max-w-xl w-full mx-auto p-4 overflow-x-hidden">
         <AnimatePresence mode="wait">
           {activeView === 'players' && (
             <PlayersPage 
@@ -634,6 +924,7 @@ export default function App() {
               startTournament={startTournament}
               stake={stake}
               setStake={setStake}
+              onAction={(id: string, isExternal: boolean) => setShowRechargeModal({show: true, playerId: id, isExternal})}
               currentKingId={currentKingId}
               isInstallable={isInstallable}
               handleInstallApp={handleInstallApp}
@@ -664,6 +955,8 @@ export default function App() {
               showAudit={showAudit}
               setShowAudit={setShowAudit}
               currentKingId={currentKingId}
+              currentExternalBets={currentExternalBets}
+              players={players}
             />
           )}
 
@@ -680,9 +973,88 @@ export default function App() {
               archive={archive} 
               sessions={sessions} 
               onDeleteSession={deleteSession}
+              players={players}
             />
           )}
         </AnimatePresence>
+
+        <AnimatePresence>
+          {showRechargeModal.show && (
+            <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+              <motion.div 
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.9, opacity: 0 }}
+                className="bg-white dark:bg-slate-800 rounded-3xl p-6 w-full max-w-sm shadow-2xl space-y-6"
+              >
+                <div className="text-center space-y-2">
+                  <div className={`w-16 h-16 ${showRechargeModal.isExternal ? 'bg-orange-50 text-orange-500' : 'bg-green-50 text-green-500'} rounded-full flex items-center justify-center mx-auto`}>
+                    {showRechargeModal.isExternal ? <Sword className="w-8 h-8" /> : <Plus className="w-8 h-8" />}
+                  </div>
+                  <h3 className="text-xl font-display font-bold">
+                    {showRechargeModal.isExternal ? 'Pari Extérieur' : 'Recharger Portefeuille'}
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    {players.find(p => p.id === showRechargeModal.playerId)?.name}
+                  </p>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-3">
+                  {[500, 1000, 2000, 5000].map(amt => (
+                    <button
+                      key={amt}
+                      onClick={() => {
+                        if (showRechargeModal.isExternal) {
+                          externalBet(showRechargeModal.playerId, amt);
+                        } else {
+                          rechargeWallet(showRechargeModal.playerId, amt);
+                        }
+                        setShowRechargeModal({show: false, playerId: '', isExternal: false});
+                      }}
+                      className="bg-slate-50 hover:bg-slate-100 p-4 rounded-xl font-black text-slate-700 transition-all active:scale-95"
+                    >
+                      {amt.toLocaleString()}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="pt-2">
+                  <input 
+                    type="number"
+                    placeholder="Autre montant..."
+                    className="w-full bg-slate-50 border border-slate-100 rounded-xl p-4 text-center font-black outline-none focus:ring-2 focus:ring-primary/20"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        const val = parseInt((e.target as HTMLInputElement).value);
+                        if (!isNaN(val)) {
+                          if (showRechargeModal.isExternal) {
+                            externalBet(showRechargeModal.playerId, val);
+                          } else {
+                            rechargeWallet(showRechargeModal.playerId, val);
+                          }
+                        }
+                        setShowRechargeModal({show: false, playerId: '', isExternal: false});
+                      }
+                    }}
+                  />
+                </div>
+
+                <button
+                  onClick={() => setShowRechargeModal({show: false, playerId: '', isExternal: false})}
+                  className="w-full bg-slate-100 text-slate-500 py-3 rounded-2xl font-bold uppercase tracking-widest text-[10px]"
+                >
+                  Annuler
+                </button>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        <footer className="py-12 pb-32 text-center">
+          <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">
+            made by Evariste GNONSKAN
+          </p>
+        </footer>
       </main>
 
       {/* Bottom Navigation */}
@@ -803,7 +1175,7 @@ const pageTransition = {
 // 1. Players Module
 function PlayersPage({ 
   players, nameInput, setNameInput, addPlayer, togglePlayerActive, removePlayer, startTournament, stake, setStake, currentKingId,
-  isInstallable, handleInstallApp, archive
+  isInstallable, handleInstallApp, archive, onAction
 }: any) {
   const hasCurrentSessionData = archive.length > 0 || players.some((p: any) => p.earnings !== 0);
 
@@ -834,42 +1206,66 @@ function PlayersPage({
           <h2 className="text-xl font-display">Gestion des Joueurs</h2>
         </div>
         
-        <div className="flex gap-2 mb-6">
-          <input 
-            value={nameInput}
-            onChange={(e) => setNameInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && addPlayer()}
-            placeholder="Nom du joueur..."
-            className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 outline-none focus:ring-2 focus:ring-primary/20 transition-all font-medium"
-          />
-          <button 
-            onClick={addPlayer}
-            className="bg-primary text-white p-2 rounded-xl"
-          >
-            <Plus className="w-6 h-6" />
-          </button>
+        <div className="flex flex-col gap-3 mb-6">
+          <div className="flex gap-2">
+            <input 
+              value={nameInput}
+              onChange={(e) => setNameInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && addPlayer()}
+              placeholder="Nom du joueur..."
+              className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-primary/20 transition-all font-black"
+            />
+            <button 
+              onClick={addPlayer}
+              className="bg-primary text-white p-3 rounded-xl shadow-lg shadow-primary/20 hover:scale-105 active:scale-95 transition-all"
+            >
+              <Plus className="w-6 h-6" />
+            </button>
+          </div>
         </div>
 
-        <div className="space-y-2 mb-8 max-h-[40vh] overflow-y-auto pr-1">
+        <div className="space-y-3 mb-8 max-h-[50vh] overflow-y-auto pr-1">
           {players.map((p: any) => (
             <motion.div 
               key={p.id}
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100"
+              className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-3 shadow-sm"
             >
-              <div className="flex items-center gap-3">
-                <span className={`w-2.5 h-2.5 rounded-full ${p.active ? 'bg-green-500 shadow-[0_0_8px_#4caf50]' : 'bg-slate-300'}`} />
-                <span className={`font-semibold ${!p.active && 'text-slate-400 line-through'}`}>{p.name}</span>
-                {currentKingId === p.id && <span className="text-xs" title="Roi de la table">👑</span>}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <span className={`w-2.5 h-2.5 rounded-full ${p.active ? 'bg-green-500 shadow-[0_0_8px_#4caf50]' : 'bg-slate-300'}`} />
+                  <span className={`font-black text-slate-800 ${!p.active && 'text-slate-400 opacity-50'}`}>{p.name}</span>
+                  {currentKingId === p.id && <span className="text-xs">👑</span>}
+                </div>
+                
+                <div className="flex items-center gap-1.5">
+                  <button onClick={() => togglePlayerActive(p.id)} className={`p-2 rounded-xl transition-all ${p.active ? 'bg-white text-slate-400 hover:text-slate-600 border border-slate-100' : 'bg-green-50 text-green-600 border border-green-200'}`}>
+                    {p.active ? <UserMinus className="w-4 h-4" /> : <UserCheck className="w-4 h-4" />}
+                  </button>
+                  <button onClick={() => removePlayer(p.id)} className="p-2 rounded-xl bg-white text-red-300 hover:text-red-600 border border-slate-100 transition-all">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <button onClick={() => togglePlayerActive(p.id)} className={`p-1.5 rounded-lg border ${p.active ? 'bg-white text-slate-500' : 'bg-green-50 text-green-600 border-green-200'}`}>
-                  {p.active ? <UserMinus className="w-4 h-4" /> : <UserCheck className="w-4 h-4" />}
-                </button>
-                <button onClick={() => removePlayer(p.id)} className="p-1.5 rounded-lg border bg-white text-red-400 hover:text-red-600">
-                  <Trash2 className="w-4 h-4" />
-                </button>
+
+              <div className="flex items-center justify-between gap-2 bg-white/50 rounded-xl p-3 border border-slate-100/50">
+                <div className="space-y-1">
+                  <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none">Portefeuille</div>
+                  <div className={`text-sm font-black transition-colors ${p.wallet <= 0 ? 'text-red-500' : 'text-primary'}`}>
+                    {p.wallet.toLocaleString()} <span className="text-[9px]">FCFA</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={() => onAction(p.id, false)}
+                    className="flex flex-col items-center gap-1 p-1 bg-green-50 rounded-lg hover:bg-green-100 transition-colors"
+                  >
+                    <Plus className="w-3.5 h-3.5 text-green-600" />
+                    <span className="text-[8px] font-black text-green-600 uppercase tracking-tighter">Recharge</span>
+                  </button>
+                </div>
               </div>
             </motion.div>
           ))}
@@ -878,22 +1274,24 @@ function PlayersPage({
           )}
         </div>
 
-        <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 mb-6">
-          <div className="flex items-center justify-between gap-3 mb-2">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">Mise de base</span>
-            <div className="flex items-center gap-1">
-              <input 
-                type="number" 
-                value={stake}
-                onChange={(e) => setStake(parseInt(e.target.value) || 0)}
-                className="w-20 text-right font-black text-xl bg-transparent outline-none text-primary"
-              />
-              <span className="text-[10px] font-bold text-slate-400">FCFA</span>
+        <div className="grid grid-cols-1 gap-4 mb-8">
+          <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+            <div className="flex items-center justify-between gap-3 mb-2">
+              <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">Mise de base</span>
+              <div className="flex items-center gap-1">
+                <input 
+                  type="number" 
+                  value={stake}
+                  onChange={(e) => setStake(parseInt(e.target.value) || 0)}
+                  className="w-20 text-right font-black text-xl bg-transparent outline-none text-primary"
+                />
+                <span className="text-[10px] font-bold text-slate-400">FCFA</span>
+              </div>
             </div>
+            <p className="text-[9px] text-slate-400 leading-relaxed italic">
+              Proposée par défaut avant chaque match.
+            </p>
           </div>
-          <p className="text-[10px] text-slate-400 text-center leading-relaxed italic">
-            Cette mise sera proposée par défaut avant chaque match.
-          </p>
         </div>
 
         <div className="flex flex-col gap-3">
@@ -942,12 +1340,14 @@ interface MatchPageProps {
   showAudit: boolean;
   setShowAudit: (val: boolean) => void;
   currentKingId: string | null;
+  currentExternalBets: ExternalBet[];
+  players: Player[];
 }
 
 // 2. Match Module
 function MatchPage({ 
   currentMatch, scores, pointsInput, setPointsInput, submitPoints, currentTurn, matchMoves, updateMove, deleteMove, countedOut, endMatchEarly, showNextPrompt, handleStartNext,
-  showReplayPrompt, replayMatch, endAsDraw, lastDrawScores, currentMatchStake, showAudit, setShowAudit, currentKingId
+  showReplayPrompt, replayMatch, endAsDraw, lastDrawScores, currentMatchStake, showAudit, setShowAudit, currentKingId, currentExternalBets, players
 }: MatchPageProps) {
   if (showReplayPrompt) {
     return (
@@ -1141,6 +1541,42 @@ function MatchPage({
             Victoire à +150 d&apos;écart
           </div>
         </div>
+
+        {/* Display Active External Bets */}
+        {currentExternalBets.length > 0 && (
+          <div className="mt-8 pt-6 border-t border-slate-100">
+            <div className="flex items-center gap-2 mb-3">
+              <Sword className="w-3 h-3 text-orange-500" />
+              <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Paris Extérieurs Actifs</h4>
+            </div>
+            <div className="grid grid-cols-1 gap-2">
+              {currentExternalBets.map(bet => {
+                const bA = players.find(p => p.id === bet.betterAId);
+                const bB = players.find(p => p.id === bet.betterBId);
+                return (
+                  <div key={bet.id} className="bg-slate-50 rounded-xl p-3 border border-slate-100 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-black text-slate-700">{bA?.name}</span>
+                        <span className="text-[8px] font-black text-slate-300 uppercase">VS</span>
+                        <span className="text-xs font-black text-slate-700">{bB?.name}</span>
+                      </div>
+                      <div className="text-[10px] font-black text-primary">{bet.amount.toLocaleString()} FCFA</div>
+                    </div>
+                    <div className="flex items-center justify-between text-[9px] font-black uppercase tracking-widest pt-1 border-t border-slate-200/50">
+                      <div className={bet.betOnPlayerId === currentMatch?.j1.id ? 'text-primary' : 'text-indigo-600'}>
+                        {bA?.name} → {bet.betOnPlayerId === currentMatch?.j1.id ? currentMatch.j1.name : currentMatch?.j2.name}
+                      </div>
+                      <div className={bet.betOnPlayerId === currentMatch?.j1.id ? 'text-indigo-600' : 'text-primary'}>
+                        {bB?.name} → {bet.betOnPlayerId === currentMatch?.j1.id ? currentMatch?.j2.name : currentMatch?.j1.name}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </section>
 
       {/* Match History (Moves) */}
@@ -1336,7 +1772,14 @@ function RankingPage({ players, rankingSearch, setRankingSearch }: { players: Pl
                 <div className={`text-xl font-display font-black leading-tight ${p.earnings >= 0 ? 'text-primary' : 'text-red-500'}`}>
                   {p.earnings > 0 ? '+' : ''}{p.earnings.toLocaleString()}
                 </div>
-                <div className="text-[9px] font-black text-slate-300 uppercase tracking-widest">FCFA</div>
+                <div className="text-[9px] font-black text-slate-300 uppercase tracking-widest mb-2">Gains (FCFA)</div>
+                
+                <div className="pt-2 border-t border-slate-100">
+                  <div className={`text-sm font-black ${p.wallet <= 0 ? 'text-red-400' : 'text-green-600'}`}>
+                    {p.wallet.toLocaleString()}
+                  </div>
+                  <div className="text-[8px] font-black text-slate-300 uppercase tracking-widest">Wallet</div>
+                </div>
               </div>
             </motion.div>
           ))}
@@ -1353,8 +1796,46 @@ function RankingPage({ players, rankingSearch, setRankingSearch }: { players: Pl
 }
 
 // 4. History Module
-function HistoryPage({ archive, sessions, onDeleteSession }: any) {
+function HistoryPage({ archive, sessions, onDeleteSession, players }: any) {
   const [sessionDetail, setSessionDetail] = useState<SessionRecord | null>(null);
+
+  const renderExternalBets = (bets: ExternalBet[], currentPlayers: Player[], winnerId: string) => {
+    if (!bets || bets.length === 0) return null;
+    return (
+      <div className="mt-2 pt-2 border-t border-slate-100 space-y-1">
+        <div className="flex items-center gap-1.5 mb-1">
+          <Sword className="w-2.5 h-2.5 text-orange-400" />
+          <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Paris duels</span>
+        </div>
+        {bets.map((bet) => {
+          const bA = currentPlayers.find(p => p.id === bet.betterAId);
+          const bB = currentPlayers.find(p => p.id === bet.betterBId);
+          const bAName = bA?.name || "??";
+          const bBName = bB?.name || "??";
+          
+          let status = "";
+          if (winnerId === 'draw') {
+             status = "Remboursé";
+          } else {
+             const aWon = bet.betOnPlayerId === winnerId;
+             status = aWon ? `${bAName} Gagne` : `${bBName} Gagne`;
+          }
+          
+          return (
+            <div key={bet.id} className="flex items-center justify-between text-[9px] font-bold">
+              <div className="flex items-center gap-1">
+                <span className="text-slate-600 truncate max-w-[60px]">{bAName}</span>
+                <span className="text-slate-300 italic">vs</span>
+                <span className="text-slate-600 truncate max-w-[60px]">{bBName}</span>
+                <span className="text-[7px] text-primary/60 ml-1">({status})</span>
+              </div>
+              <div className="text-primary">{bet.amount} <span className="text-[7px] text-slate-300">FCFA</span></div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
 
   return (
     <motion.div {...pageTransition} className="space-y-6">
@@ -1375,9 +1856,11 @@ function HistoryPage({ archive, sessions, onDeleteSession }: any) {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 flex-wrap min-w-0 pr-4">
                   <span className="font-black text-slate-900 truncate max-w-[100px]">{a.winner}</span>
-                  <div className="bg-green-100 p-0.5 rounded shadow-sm text-green-600">
-                    <CheckCircle2 className="w-3 h-3" />
-                  </div>
+                  {a.winner !== 'Nul' && (
+                    <div className="bg-green-100 p-0.5 rounded shadow-sm text-green-600">
+                      <CheckCircle2 className="w-3 h-3" />
+                    </div>
+                  )}
                   <ArrowRight className="w-3 h-3 text-slate-300" />
                   <span className="text-slate-400 text-sm italic truncate max-w-[100px] opacity-70">{a.loser}</span>
                 </div>
@@ -1385,6 +1868,7 @@ function HistoryPage({ archive, sessions, onDeleteSession }: any) {
                   {a.score}
                 </div>
               </div>
+              {renderExternalBets(a.externalBets, players, a.winnerId)}
             </div>
           ))}
           {archive.length === 0 && (
@@ -1471,15 +1955,18 @@ function HistoryPage({ archive, sessions, onDeleteSession }: any) {
                 </div>
 
                 <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b pb-1 mt-6">Matchs de la session</h4>
-                <div className="space-y-2">
+                <div className="space-y-4 pt-2">
                   {sessionDetail.archive.map((match, idx) => (
-                    <div key={idx} className="flex items-center justify-between py-2 text-xs border-b border-slate-50 last:border-0">
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold">{match.winner}</span>
-                        <ArrowRight className="w-2 h-2 text-slate-300" />
-                        <span className="text-slate-400">{match.loser}</span>
+                    <div key={idx} className="space-y-2 pb-3 border-b border-slate-50 last:border-0 last:pb-0">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-sm text-slate-700">{match.winner}</span>
+                          <ArrowRight className="w-2.5 h-2.5 text-slate-300" />
+                          <span className="text-slate-400 text-xs">{match.loser}</span>
+                        </div>
+                        <span className="font-mono font-black text-primary text-sm">{match.score}</span>
                       </div>
-                      <span className="font-mono font-bold text-primary">{match.score}</span>
+                      {renderExternalBets(match.externalBets, sessionDetail.players, match.winnerId)}
                     </div>
                   ))}
                 </div>
