@@ -82,6 +82,7 @@ export default function App() {
   const [activeView, setActiveView] = useState<View>('players');
   const [players, setPlayers] = useState<Player[]>([]);
   const [nameInput, setNameInput] = useState('');
+  const [walletInput, setWalletInput] = useState('5000');
   const [stake, setStake] = useState(1000);
 
   const [pointsInput, setPointsInput] = useState('');
@@ -146,6 +147,7 @@ export default function App() {
 
   const addPlayer = () => {
     if (!nameInput.trim()) return;
+    const walletAmount = parseInt(walletInput) || 0;
     const newPlayer: Player = {
       id: Math.random().toString(36).substr(2, 9),
       name: nameInput.trim(),
@@ -153,10 +155,11 @@ export default function App() {
       wins: 0,
       losses: 0,
       earnings: 0,
-      wallet: 5000,
+      wallet: walletAmount,
     };
     setPlayers([...players, newPlayer]);
     setNameInput('');
+    setWalletInput('5000');
   };
 
   const removePlayer = (id: string) => {
@@ -379,15 +382,63 @@ export default function App() {
   const handleDraw = (finalScores: { j1: number; j2: number }) => {
     stopAlertLoop();
     setLastDrawScores(finalScores);
+    
+    // REFUND EVERYTHING IMMEDIATELY
+    const updatedPlayers = players.map(p => {
+      let wallet = p.wallet;
+      let earnings = p.earnings;
+      let active = p.active;
+
+      // Refund match stake
+      if (currentMatch && (p.id === currentMatch.j1.id || p.id === currentMatch.j2.id)) {
+        wallet += currentMatchStake;
+        earnings += currentMatchStake;
+        if (wallet > 0) active = true;
+      }
+
+      // Refund external bets
+      currentExternalBets.forEach(bet => {
+        if (bet.betterAId === p.id || bet.betterBId === p.id) {
+          wallet += bet.amount;
+          earnings += bet.amount;
+          if (wallet > 0) active = true;
+        }
+      });
+
+      return { ...p, wallet, earnings, active };
+    });
+
+    setPlayers(updatedPlayers);
+    // We don't clear currentExternalBets yet because we need them for the draw record if they choose 'Non'
+    // But we record that they have been refunded.
+    
     setShowReplayPrompt(true);
-    // Move currentMatch to a temp state if needed, or just don't null it yet
-    // For now, we'll assume the currentMatch was active.
   };
 
   const replayMatch = (boost: number = 0) => {
     if (!currentMatch) return;
     setShowReplayPrompt(false);
+    
     const newStake = currentMatchStake + boost;
+    
+    // Debit for the REPLAY (since we refunded in handleDraw)
+    const updatedPlayers = players.map(p => {
+      let wallet = p.wallet;
+      let earnings = p.earnings;
+      let active = p.active;
+
+      if (p.id === currentMatch.j1.id || p.id === currentMatch.j2.id) {
+        // Debit the full new stake
+        wallet -= newStake;
+        earnings -= newStake;
+        if (wallet <= 0) active = false; // Note: risky if they have exactly 0, but consistent with debit logic
+      }
+
+      return { ...p, wallet, earnings, active };
+    });
+
+    setPlayers(updatedPlayers);
+    setCurrentExternalBets([]); // Bets are always refunded on draw/replay
     
     // We keep the same participants
     setScores({ j1: 0, j2: 0 });
@@ -399,28 +450,9 @@ export default function App() {
 
   const endAsDraw = () => {
     setShowReplayPrompt(false);
+    // Already refunded in handleDraw, so we just clear bets and record.
     
-    // Refund match stakes and external bets
-    const updatedPlayers = players.map(p => {
-      let wallet = p.wallet;
-      let earnings = p.earnings;
-
-      if (currentMatch && (p.id === currentMatch.j1.id || p.id === currentMatch.j2.id)) {
-        wallet += currentMatchStake;
-        earnings += currentMatchStake;
-      }
-
-      currentExternalBets.forEach(bet => {
-        if (bet.betterAId === p.id || bet.betterBId === p.id) {
-          wallet += bet.amount;
-          earnings += bet.amount;
-        }
-      });
-
-      return { ...p, wallet, earnings };
-    });
-
-    setPlayers(updatedPlayers);
+    const savedBets = [...currentExternalBets];
     setCurrentExternalBets([]);
 
     const record: MatchRecord = {
@@ -431,7 +463,7 @@ export default function App() {
       score: `${lastDrawScores.j1}-${lastDrawScores.j2}`,
       stake: 0,
       date: new Date().toLocaleString(),
-      externalBets: [...currentExternalBets],
+      externalBets: savedBets,
     };
     setArchive([record, ...archive]);
     setCurrentMatch(null); // Now we clear the match UI
@@ -610,7 +642,7 @@ export default function App() {
         losses, 
         earnings, 
         wallet, 
-        active: wallet > 0 ? p.active : false 
+        active: wallet > 0 ? (p.id === winner.id ? true : p.active) : false 
       };
     });
 
@@ -918,6 +950,8 @@ export default function App() {
               players={players}
               nameInput={nameInput}
               setNameInput={setNameInput}
+              walletInput={walletInput}
+              setWalletInput={setWalletInput}
               addPlayer={addPlayer}
               togglePlayerActive={togglePlayerActive}
               removePlayer={removePlayer}
@@ -1174,7 +1208,7 @@ const pageTransition = {
 
 // 1. Players Module
 function PlayersPage({ 
-  players, nameInput, setNameInput, addPlayer, togglePlayerActive, removePlayer, startTournament, stake, setStake, currentKingId,
+  players, nameInput, setNameInput, walletInput, setWalletInput, addPlayer, togglePlayerActive, removePlayer, startTournament, stake, setStake, currentKingId,
   isInstallable, handleInstallApp, archive, onAction
 }: any) {
   const hasCurrentSessionData = archive.length > 0 || players.some((p: any) => p.earnings !== 0);
@@ -1206,31 +1240,41 @@ function PlayersPage({
           <h2 className="text-xl font-display">Gestion des Joueurs</h2>
         </div>
         
-        <div className="flex flex-col gap-3 mb-6">
+        <div className="flex flex-col sm:flex-row gap-2 mb-6">
+          <input 
+            value={nameInput}
+            onChange={(e) => setNameInput(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && addPlayer()}
+            placeholder="Nom du joueur..."
+            className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-primary/20 transition-all font-black text-slate-800"
+          />
           <div className="flex gap-2">
-            <input 
-              value={nameInput}
-              onChange={(e) => setNameInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && addPlayer()}
-              placeholder="Nom du joueur..."
-              className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-primary/20 transition-all font-black"
-            />
+            <div className="relative flex-1 sm:w-32">
+              <input 
+                type="number"
+                value={walletInput}
+                onChange={(e) => setWalletInput(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && addPlayer()}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-3 pr-8 py-3 outline-none focus:ring-2 focus:ring-primary/20 transition-all font-black text-slate-800 text-right"
+              />
+              <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[8px] font-black text-slate-400">FA</span>
+            </div>
             <button 
               onClick={addPlayer}
-              className="bg-primary text-white p-3 rounded-xl shadow-lg shadow-primary/20 hover:scale-105 active:scale-95 transition-all"
+              className="bg-primary text-white p-3 rounded-xl shadow-lg shadow-primary/20 hover:scale-110 active:scale-95 transition-all"
             >
               <Plus className="w-6 h-6" />
             </button>
           </div>
         </div>
 
-        <div className="space-y-3 mb-8 max-h-[50vh] overflow-y-auto pr-1">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-8 max-h-[60vh] overflow-y-auto pr-1">
           {players.map((p: any) => (
             <motion.div 
               key={p.id}
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-3 shadow-sm"
+              className="p-4 bg-slate-50 rounded-2xl border border-slate-100 flex flex-col justify-between gap-3 shadow-sm hover:border-primary/20 transition-colors"
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -1294,20 +1338,20 @@ function PlayersPage({
           </div>
         </div>
 
-        <div className="flex flex-col gap-3">
+        <div className={`grid gap-3 ${hasCurrentSessionData ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'}`}>
           {hasCurrentSessionData && (
             <button 
               onClick={() => startTournament(false)}
-              className="w-full flex items-center justify-center gap-2 bg-secondary py-4 rounded-2xl text-white font-black uppercase tracking-widest hover:brightness-105 active:scale-95 transition-all shadow-lg"
+              className="flex items-center justify-center gap-2 bg-secondary py-4 rounded-2xl text-white font-black uppercase tracking-widest hover:brightness-105 active:scale-95 transition-all shadow-lg"
             >
               <Play className="w-5 h-5 fill-current" />
-              Reprendre la partie
+              Reprendre
             </button>
           )}
 
           <button 
             onClick={() => startTournament(hasCurrentSessionData)}
-            className={`w-full flex items-center justify-center gap-2 py-4 rounded-2xl text-white font-black uppercase tracking-widest hover:brightness-105 active:scale-95 transition-all shadow-lg ${hasCurrentSessionData ? 'bg-indigo-600' : 'bg-secondary'}`}
+            className={`flex items-center justify-center gap-2 py-4 rounded-2xl text-white font-black uppercase tracking-widest hover:brightness-105 active:scale-95 transition-all shadow-lg ${hasCurrentSessionData ? 'bg-indigo-600' : 'bg-secondary'}`}
           >
             {hasCurrentSessionData ? <Plus className="w-5 h-5" /> : <Play className="w-5 h-5 fill-current" />}
             {hasCurrentSessionData ? 'Nouvelle Session' : 'Lancer la Partie'}
