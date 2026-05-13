@@ -24,7 +24,10 @@ import {
   Archive,
   Info,
   Copy,
-  Check
+  Check,
+  Edit3,
+  Volume2,
+  VolumeX
 } from 'lucide-react';
 
 // --- Types ---
@@ -116,17 +119,29 @@ export default function App() {
   const [currentExternalBets, setCurrentExternalBets] = useState<ExternalBet[]>([]);
   const [pendingExternalBets, setPendingExternalBets] = useState<ExternalBet[]>([]);
   const [pendingMatchDetails, setPendingMatchDetails] = useState<any>(null);
+  const [pendingEndMatch, setPendingEndMatch] = useState<{ winner: Player; loser: Player; scores: { j1: number; j2: number } } | null>(null);
   const [showWorkflowModal, setShowWorkflowModal] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
+  const [isVoiceEnabled, setIsVoiceEnabled] = useState(true);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [isInstallable, setIsInstallable] = useState(false);
-  const alertIntervalRef = useRef<any>(null);
 
   // Load from Local Storage on Mount
   useEffect(() => {
     const savedPlayers = localStorage.getItem('okpete-players');
     const savedArchive = localStorage.getItem('okpete-archive');
     const savedSessions = localStorage.getItem('okpete-sessions');
+    const savedActiveView = localStorage.getItem('okpete-active-view');
+    const savedCurrentMatch = localStorage.getItem('okpete-current-match');
+    const savedScores = localStorage.getItem('okpete-scores');
+    const savedMatchMoves = localStorage.getItem('okpete-match-moves');
+    const savedCurrentIndex = localStorage.getItem('okpete-current-index');
+    const savedStake = localStorage.getItem('okpete-current-match-stake');
+    const savedExternalBets = localStorage.getItem('okpete-current-external-bets');
+    const savedPendingMatch = localStorage.getItem('okpete-pending-match');
+    const savedPendingEndMatch = localStorage.getItem('okpete-pending-end-match');
+    const savedKingId = localStorage.getItem('okpete-current-king-id');
+    const savedVoice = localStorage.getItem('okpete-voice-enabled');
 
     if (savedPlayers) {
       try {
@@ -150,6 +165,17 @@ export default function App() {
     }
     if (savedArchive) setArchive(JSON.parse(savedArchive));
     if (savedSessions) setSessions(JSON.parse(savedSessions));
+    if (savedActiveView) setActiveView(savedActiveView as any);
+    if (savedCurrentMatch) setCurrentMatch(JSON.parse(savedCurrentMatch));
+    if (savedScores) setScores(JSON.parse(savedScores));
+    if (savedMatchMoves) setMatchMoves(JSON.parse(savedMatchMoves));
+    if (savedCurrentIndex) setCurrentIndex(parseInt(savedCurrentIndex));
+    if (savedStake) setCurrentMatchStake(parseInt(savedStake));
+    if (savedExternalBets) setCurrentExternalBets(JSON.parse(savedExternalBets));
+    if (savedPendingMatch) setPendingMatchDetails(JSON.parse(savedPendingMatch));
+    if (savedPendingEndMatch) setPendingEndMatch(JSON.parse(savedPendingEndMatch));
+    if (savedKingId && savedKingId !== 'null') setCurrentKingId(savedKingId);
+    if (savedVoice !== null) setIsVoiceEnabled(savedVoice === 'true');
 
     const handleBeforeInstallPrompt = (e: any) => {
       e.preventDefault();
@@ -161,7 +187,6 @@ export default function App() {
 
     return () => {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-      if (alertIntervalRef.current) clearInterval(alertIntervalRef.current);
     };
   }, []);
 
@@ -170,7 +195,18 @@ export default function App() {
     localStorage.setItem('okpete-players', JSON.stringify(players));
     localStorage.setItem('okpete-archive', JSON.stringify(archive));
     localStorage.setItem('okpete-sessions', JSON.stringify(sessions));
-  }, [players, archive, sessions]);
+    localStorage.setItem('okpete-active-view', activeView);
+    localStorage.setItem('okpete-current-match', JSON.stringify(currentMatch));
+    localStorage.setItem('okpete-scores', JSON.stringify(scores));
+    localStorage.setItem('okpete-match-moves', JSON.stringify(matchMoves));
+    localStorage.setItem('okpete-current-index', currentIndex.toString());
+    localStorage.setItem('okpete-current-match-stake', currentMatchStake.toString());
+    localStorage.setItem('okpete-current-external-bets', JSON.stringify(currentExternalBets));
+    localStorage.setItem('okpete-pending-match', JSON.stringify(pendingMatchDetails));
+    localStorage.setItem('okpete-pending-end-match', JSON.stringify(pendingEndMatch));
+    localStorage.setItem('okpete-current-king-id', currentKingId || 'null');
+    localStorage.setItem('okpete-voice-enabled', isVoiceEnabled.toString());
+  }, [players, archive, sessions, activeView, currentMatch, scores, matchMoves, currentIndex, currentMatchStake, currentExternalBets, pendingMatchDetails, currentKingId, isVoiceEnabled, pendingEndMatch]);
 
   const addPlayer = () => {
     if (!nameInput.trim()) return;
@@ -241,7 +277,6 @@ export default function App() {
     
     setSessions([newSession, ...sessions]);
     setArchive([]);
-    stopAlertLoop();
     
     // Reset all player stats but keep the players list
     const resetPlayers = players.map(p => ({
@@ -319,18 +354,16 @@ export default function App() {
 
   const endMatchEarly = () => {
     if (!currentMatch) return;
-    stopAlertLoop();
     if (scores.j1 === scores.j2) {
       handleDraw(scores);
       return;
     }
     const winner = scores.j1 > scores.j2 ? currentMatch.j1 : currentMatch.j2;
     const loser = scores.j1 > scores.j2 ? currentMatch.j2 : currentMatch.j1;
-    endMatch(winner, loser, scores);
+    setPendingEndMatch({ winner, loser, scores });
   };
 
   const handleDraw = (finalScores: { j1: number; j2: number }) => {
-    stopAlertLoop();
     setLastDrawScores(finalScores);
     setShowReplayPrompt(true);
   };
@@ -403,61 +436,6 @@ export default function App() {
     recomputeMatchState(updatedMoves);
   };
 
-  const stopAlertLoop = () => {
-    if (alertIntervalRef.current) {
-      clearInterval(alertIntervalRef.current);
-      alertIntervalRef.current = null;
-    }
-  };
-
-  const startAlertLoop = () => {
-    if (alertIntervalRef.current) return;
-    
-    // Use a shared context if possible, but browsers often require user gesture per context
-    // We'll create one and keep it alive for the duration of the alert loop
-    let audioCtx: AudioContext | null = null;
-    
-    const playOne = () => {
-      try {
-        const AudioContextClass = (window as any).AudioContext || (window as any).webkitAudioContext;
-        if (!AudioContextClass) return;
-        if (!audioCtx || audioCtx.state === 'closed') {
-          audioCtx = new AudioContextClass();
-        } else if (audioCtx.state === 'suspended') {
-          audioCtx.resume();
-        }
-        
-        const ctx = audioCtx!;
-        
-        const beep = (freq: number, startTime: number, duration: number) => {
-          const osc = ctx.createOscillator();
-          const gain = ctx.createGain();
-          
-          osc.type = 'sine';
-          osc.frequency.setValueAtTime(freq, startTime);
-          
-          gain.gain.setValueAtTime(0.1, startTime);
-          gain.gain.exponentialRampToValueAtTime(0.01, startTime + duration);
-          
-          osc.connect(gain);
-          gain.connect(ctx.destination);
-          
-          osc.start(startTime);
-          osc.stop(startTime + duration);
-        };
-
-        // Double beep pattern
-        beep(880, ctx.currentTime, 0.1);
-        beep(880, ctx.currentTime + 0.2, 0.1);
-      } catch (e) {
-        console.error("Audio error:", e);
-      }
-    };
-
-    playOne();
-    alertIntervalRef.current = setInterval(playOne, 1200);
-  };
-
   const recomputeMatchState = (moves: Move[]) => {
     const newScores = moves.reduce((acc, m) => {
       acc[m.player] += m.points;
@@ -479,8 +457,7 @@ export default function App() {
       if (diff >= 150) {
         if (leader === 'j2') {
           // Rule: If J2 leads by 150+, instant win, no alert.
-          stopAlertLoop();
-          if (currentMatch) endMatch(currentMatch.j2, currentMatch.j1, newScores);
+          if (currentMatch) setPendingEndMatch({ winner: currentMatch.j2, loser: currentMatch.j1, scores: newScores });
           setCountedOut(null);
           return;
         }
@@ -488,27 +465,26 @@ export default function App() {
         if (lastPlayer === leader) {
           // Leader (J1) just scored, trailer (J2) is now "counted out"
           setCountedOut({ player: trailer, margin: diff - 150 });
-          startAlertLoop();
         } else {
           // Trailer (J1) just played. If gap still >= 150, they lose.
-          stopAlertLoop();
-          if (currentMatch) endMatch(leader === 'j1' ? currentMatch.j1 : currentMatch.j2, leader === 'j1' ? currentMatch.j2 : currentMatch.j1, newScores);
+          if (currentMatch) {
+            const winner = leader === 'j1' ? currentMatch.j1 : currentMatch.j2;
+            const loser = leader === 'j1' ? currentMatch.j2 : currentMatch.j1;
+            setPendingEndMatch({ winner, loser, scores: newScores });
+          }
           setCountedOut(null);
         }
       } else {
         // Gap is closed below 150, normal play continues
         setCountedOut(null);
-        stopAlertLoop();
       }
     } else {
       setCurrentTurn('j1');
       setCountedOut(null);
-      stopAlertLoop();
     }
   };
 
   const endMatch = (winner: Player, loser: Player, finalScores: { j1: number; j2: number }) => {
-    stopAlertLoop();
     const updatedPlayers = players.map(p => {
       let earnings = p.earnings;
       let wins = p.wins;
@@ -814,9 +790,10 @@ WORKFLOW COMPLET - O'KPÊTÊ (SCRABBLE & PARIS)
                     <div key={bet.id} className="bg-slate-50 border border-slate-100 rounded-2xl p-4 space-y-4 relative group">
                       <button 
                         onClick={() => setPendingExternalBets(pendingExternalBets.filter((_, i) => i !== idx))}
-                        className="absolute right-2 top-2 p-1 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"
+                        className="absolute right-3 top-3 p-2 text-slate-300 hover:text-red-500 transition-all rounded-full hover:bg-red-50"
+                        title="Supprimer ce pari"
                       >
-                        <XCircle className="w-4 h-4" />
+                        <Trash2 className="w-4 h-4" />
                       </button>
 
                       <div className="grid grid-cols-2 gap-4">
@@ -959,11 +936,28 @@ WORKFLOW COMPLET - O'KPÊTÊ (SCRABBLE & PARIS)
               endAsDraw={endAsDraw}
               lastDrawScores={lastDrawScores}
               currentMatchStake={currentMatchStake}
+              setCurrentMatchStake={setCurrentMatchStake}
               showAudit={showAudit}
               setShowAudit={setShowAudit}
               currentKingId={currentKingId}
               currentExternalBets={currentExternalBets}
               players={players}
+              isVoiceEnabled={isVoiceEnabled}
+              setIsVoiceEnabled={setIsVoiceEnabled}
+              pendingEndMatch={pendingEndMatch}
+              onFinalizeMatch={() => {
+                if (!currentMatch) return;
+                const winner = scores.j1 > scores.j2 ? currentMatch.j1 : currentMatch.j2;
+                const loser = scores.j1 > scores.j2 ? currentMatch.j2 : currentMatch.j1;
+                
+                if (scores.j1 === scores.j2) {
+                  handleDraw(scores);
+                } else {
+                  endMatch(winner, loser, scores);
+                }
+                setPendingEndMatch(null);
+                setShowAudit(false);
+              }}
             />
           )}
 
@@ -1352,18 +1346,56 @@ interface MatchPageProps {
   endAsDraw: () => void;
   lastDrawScores: { j1: number; j2: number };
   currentMatchStake: number;
+  setCurrentMatchStake: (stake: number) => void;
   showAudit: boolean;
   setShowAudit: (val: boolean) => void;
   currentKingId: string | null;
   currentExternalBets: ExternalBet[];
   players: Player[];
+  isVoiceEnabled: boolean;
+  setIsVoiceEnabled: (val: boolean) => void;
+  pendingEndMatch: { winner: Player; loser: Player; scores: { j1: number; j2: number } } | null;
+  onFinalizeMatch: () => void;
 }
 
 // 2. Match Module
 function MatchPage({ 
   currentMatch, scores, pointsInput, setPointsInput, submitPoints, currentTurn, matchMoves, updateMove, deleteMove, countedOut, endMatchEarly, showNextPrompt, handleStartNext,
-  showReplayPrompt, replayMatch, endAsDraw, lastDrawScores, currentMatchStake, showAudit, setShowAudit, currentKingId, currentExternalBets, players
+  showReplayPrompt, replayMatch, endAsDraw, lastDrawScores, currentMatchStake, setCurrentMatchStake, showAudit, setShowAudit, currentKingId, currentExternalBets, players,
+  isVoiceEnabled, setIsVoiceEnabled, pendingEndMatch, onFinalizeMatch
 }: MatchPageProps) {
+  const [isEditingStake, setIsEditingStake] = useState(false);
+  const [newStakeInput, setNewStakeInput] = useState(currentMatchStake.toString());
+
+  // Text-to-speech for the lead message and alerts
+  useEffect(() => {
+    if (!isVoiceEnabled || !currentMatch) return;
+
+    let text = "";
+    
+    if (countedOut) {
+      const pName = countedOut.player === 'j1' ? currentMatch.j1.name : currentMatch.j2.name;
+      text = `Attention : ${pName} doit jouer ${countedOut.margin + 1} points`;
+    } else if (scores.j1 !== scores.j2 && (scores.j1 > 0 || scores.j2 > 0)) {
+      const leaderName = scores.j1 > scores.j2 ? currentMatch.j1.name : currentMatch.j2.name;
+      const gap = Math.abs(scores.j1 - scores.j2);
+      text = `${leaderName} mène de ${gap} points`;
+    }
+
+    if (text) {
+      const speak = () => {
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'fr-FR';
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(utterance);
+      };
+
+      // Small delay to ensure UI transition completes
+      const timer = setTimeout(speak, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [scores.j1, scores.j2, isVoiceEnabled, currentMatch, countedOut]);
+
   if (showReplayPrompt) {
     return (
       <motion.div {...pageTransition} className="flex flex-col items-center justify-center py-10 text-center space-y-6">
@@ -1420,6 +1452,45 @@ function MatchPage({
     );
   }
 
+  if (pendingEndMatch && !showAudit) {
+    const leaderName = scores.j1 > scores.j2 ? currentMatch?.j1.name : currentMatch?.j2.name;
+    const isDraw = scores.j1 === scores.j2;
+
+    return (
+      <motion.div {...pageTransition} className="flex flex-col items-center justify-center py-20 text-center space-y-8 px-6">
+        <div className="w-24 h-24 bg-yellow-100 rounded-full flex items-center justify-center text-yellow-600 shadow-inner">
+          <Trophy className="w-12 h-12" />
+        </div>
+        <div className="space-y-3">
+          <h3 className="text-2xl font-black uppercase tracking-tight text-slate-800">Match Terminé !</h3>
+          <p className="text-slate-500 font-medium">
+            {isDraw ? 'Score d\'égalité' : <>Vainqueur : <span className="text-primary font-black">{leaderName}</span></>}
+          </p>
+          <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">
+            Score Final : {scores.j1} - {scores.j2}
+          </p>
+        </div>
+
+        <div className="w-full space-y-4">
+          <button 
+            onClick={() => setShowAudit(true)}
+            className="w-full bg-slate-800 text-white py-5 rounded-2xl font-black uppercase tracking-widest shadow-xl flex items-center justify-center gap-3 active:scale-95 transition-all"
+          >
+            <HistoryIcon className="w-5 h-5" />
+            Vérifier les scores (Audit)
+          </button>
+          
+          <button 
+            onClick={() => onFinalizeMatch()}
+            className="w-full bg-primary text-white py-5 rounded-2xl font-black uppercase tracking-widest shadow-lg shadow-primary/20 active:scale-95 transition-all"
+          >
+            {isDraw ? 'Confirmer le Nul' : 'Confirmer & Déclarer'}
+          </button>
+        </div>
+      </motion.div>
+    );
+  }
+
   if (!currentMatch) {
     return (
       <motion.div {...pageTransition} className="flex flex-col items-center justify-center py-20 text-center space-y-4">
@@ -1438,13 +1509,61 @@ function MatchPage({
         <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-primary to-transparent opacity-30" />
         
         <div className="flex items-center justify-between mb-8 px-2">
-          <h3 className="text-primary font-black uppercase tracking-widest text-[10px]">Match en cours</h3>
-          <button 
-            onClick={endMatchEarly}
-            className="text-[10px] font-black text-red-400 uppercase tracking-widest hover:text-red-600 transition-colors bg-red-50 px-2 py-1 rounded"
-          >
-            Terminer le match
-          </button>
+          <div className="flex flex-col">
+            <h3 className="text-primary font-black uppercase tracking-widest text-[10px]">Match en cours</h3>
+            <div className="flex items-center gap-2 mt-1">
+              {isEditingStake ? (
+                <div className="flex items-center gap-1">
+                  <input 
+                    type="number"
+                    value={newStakeInput}
+                    onChange={(e) => setNewStakeInput(e.target.value)}
+                    className="w-20 bg-slate-50 border border-slate-200 rounded px-2 py-0.5 text-xs font-black text-primary outline-none"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        setCurrentMatchStake(parseInt(newStakeInput) || 0);
+                        setIsEditingStake(false);
+                      }
+                      if (e.key === 'Escape') {
+                        setIsEditingStake(false);
+                        setNewStakeInput(currentMatchStake.toString());
+                      }
+                    }}
+                    autoFocus
+                  />
+                  <button 
+                    onClick={() => {
+                      setCurrentMatchStake(parseInt(newStakeInput) || 0);
+                      setIsEditingStake(false);
+                    }}
+                    className="text-[10px] bg-primary text-white px-1.5 py-0.5 rounded font-black"
+                  >
+                    OK
+                  </button>
+                </div>
+              ) : (
+                <button 
+                  onClick={() => {
+                    setNewStakeInput(currentMatchStake.toString());
+                    setIsEditingStake(true);
+                  }}
+                  className="flex items-center gap-1 px-2 py-0.5 rounded-lg hover:bg-slate-50 transition-colors group"
+                >
+                  <Coins className="w-3 h-3 text-orange-400" />
+                  <span className="text-xs font-black text-slate-700">{currentMatchStake.toLocaleString()} FCFA</span>
+                  <Edit3 className="w-2.5 h-2.5 text-slate-300 group-hover:text-primary transition-colors" />
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <button 
+              onClick={endMatchEarly}
+              className="text-[10px] font-black text-red-400 uppercase tracking-widest hover:text-red-600 transition-colors bg-red-50 px-2 py-1 rounded"
+            >
+              Terminer le match
+            </button>
+          </div>
         </div>
 
         <AnimatePresence>
@@ -1453,14 +1572,16 @@ function MatchPage({
               initial={{ height: 0, opacity: 0 }}
               animate={{ height: 'auto', opacity: 1 }}
               exit={{ height: 0, opacity: 0 }}
-              className="bg-red-50 border border-red-200 rounded-2xl p-4 mb-6 text-center"
+              className="bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-6 text-center"
             >
-              <div className="flex items-center justify-center gap-2 text-red-600 font-black text-xs uppercase tracking-widest animate-pulse">
-                <XCircle className="w-4 h-4" />
-                Attention : Joueur {countedOut.player === 'j1' ? '1' : '2'} est compté de {countedOut.margin}
+              <div className="flex items-center justify-center gap-2 text-amber-600 font-black text-sm uppercase tracking-tight animate-pulse">
+                <XCircle className="w-5 h-5 flex-shrink-0" />
+                <span>
+                  Attention : <span className="underline decoration-2">{countedOut.player === 'j1' ? currentMatch.j1.name : currentMatch.j2.name}</span> doit jouer <span className="text-lg">{countedOut.margin + 1}</span> points
+                </span>
               </div>
-              <p className="text-[10px] text-red-400 mt-1 font-bold">
-                Réduisez l&apos;écart à moins de 150 points ce tour !
+              <p className="text-[10px] text-amber-500 mt-1 font-bold italic">
+                Réduisez l&apos;écart pour rester dans le match !
               </p>
             </motion.div>
           )}
@@ -1470,7 +1591,7 @@ function MatchPage({
           {/* Player 1 Block */}
           <motion.div 
             animate={currentTurn === 'j1' ? { scale: [1, 1.02, 1], borderColor: '#2e7d32' } : { scale: 1, borderColor: '#f1f5f9' }}
-            transition={currentTurn === 'j1' ? { repeat: Infinity, duration: 2 } : {}}
+            transition={currentTurn === 'j1' ? { repeat: Infinity, duration: 2, ease: "easeInOut" } : {}}
             className={`flex-1 flex flex-col items-center text-center p-4 rounded-2xl border-2 transition-all ${currentTurn === 'j1' ? 'bg-primary/5 border-primary shadow-sm' : 'bg-slate-50 border-slate-100'}`}
           >
             <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm mb-3 transition-colors ${currentTurn === 'j1' ? 'bg-primary text-white' : 'bg-slate-200 text-slate-500'}`}>
@@ -1489,7 +1610,7 @@ function MatchPage({
           {/* Player 2 Block */}
           <motion.div 
             animate={currentTurn === 'j2' ? { scale: [1, 1.02, 1], borderColor: '#4f46e5' } : { scale: 1, borderColor: '#f1f5f9' }}
-            transition={currentTurn === 'j2' ? { repeat: Infinity, duration: 2 } : {}}
+            transition={currentTurn === 'j2' ? { repeat: Infinity, duration: 2, ease: "easeInOut" } : {}}
             className={`flex-1 flex flex-col items-center text-center p-4 rounded-2xl border-2 transition-all ${currentTurn === 'j2' ? 'bg-indigo-50 border-indigo-500 shadow-sm' : 'bg-slate-50 border-slate-100'}`}
           >
             <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm mb-3 transition-colors ${currentTurn === 'j2' ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-500'}`}>
@@ -1502,30 +1623,71 @@ function MatchPage({
           </motion.div>
         </div>
 
-        {/* Lead Indicator */}
-        <div className="text-center mb-8 h-6">
-          <AnimatePresence mode="wait">
-            {scores.j1 !== scores.j2 ? (
-              <motion.div 
-                key={scores.j1 > scores.j2 ? 'j1-lead' : 'j2-lead'}
-                initial={{ opacity: 0, y: 5 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -5 }}
-                className={`text-[11px] font-bold inline-block px-4 py-1 rounded-full uppercase tracking-widest ${scores.j1 > scores.j2 ? 'text-primary bg-primary/5' : 'text-indigo-600 bg-indigo-50'}`}
-              >
-                {scores.j1 > scores.j2 ? currentMatch.j1.name : currentMatch.j2.name} mène de {Math.abs(scores.j1 - scores.j2)} points
-              </motion.div>
-            ) : scores.j1 > 0 ? (
-              <motion.div 
-                key="draw"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="text-[11px] font-bold text-slate-400 uppercase tracking-widest"
-              >
-                Égalité parfaite
-              </motion.div>
-            ) : null}
-          </AnimatePresence>
+        {/* Lead Indicator & Voice Toggle */}
+        <div className="flex flex-col items-center gap-3 mb-10">
+          <div className="h-16 flex items-center justify-center">
+            <AnimatePresence mode="wait">
+              {scores.j1 !== scores.j2 ? (
+                <motion.div 
+                  key={`${scores.j1 > scores.j2 ? 'j1' : 'j2'}-${Math.abs(scores.j1 - scores.j2)}`}
+                  initial={{ opacity: 0, y: 20, scale: 0.4 }}
+                  animate={{ 
+                    opacity: 1, 
+                    y: 0, 
+                    scale: [0.6, 1.15, 1],
+                  }}
+                  transition={{
+                    scale: { duration: 0.5, times: [0, 0.6, 1], ease: "easeOut" },
+                    y: { type: 'spring', damping: 10, stiffness: 200 },
+                    opacity: { duration: 0.2 }
+                  }}
+                  exit={{ opacity: 0, scale: 0.6, transition: { duration: 0.1 } }}
+                  className={`inline-flex items-center gap-3 px-6 py-2.5 rounded-2xl shadow-lg border-2 ${
+                    scores.j1 > scores.j2 
+                      ? 'bg-amber-50 border-amber-500' 
+                      : 'bg-blue-50 border-blue-500'
+                  }`}
+                >
+                  <span className={`text-lg font-black uppercase tracking-tighter ${scores.j1 > scores.j2 ? 'text-amber-600' : 'text-[#2979ff]'}`}>
+                    {scores.j1 > scores.j2 ? currentMatch.j1.name : currentMatch.j2.name}
+                  </span>
+                  <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest px-1">mène de</span>
+                  <motion.span 
+                    animate={{ scale: [1, 1.2, 1], rotate: [-5, 5, 0] }}
+                    transition={{ duration: 0.5, ease: "easeInOut" }}
+                    className={`text-3xl font-black italic drop-shadow-md ${scores.j1 > scores.j2 ? 'text-amber-600' : 'text-[#2979ff]'}`}
+                  >
+                    {Math.abs(scores.j1 - scores.j2)}
+                  </motion.span>
+                  <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest">points</span>
+                </motion.div>
+              ) : scores.j1 > 0 ? (
+                <motion.div 
+                  key="draw"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className="text-[11px] font-bold text-slate-400 uppercase tracking-widest"
+                >
+                  Égalité parfaite
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
+          </div>
+
+          <button 
+            onClick={() => setIsVoiceEnabled(!isVoiceEnabled)}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-full transition-all border shadow-sm ${
+              isVoiceEnabled 
+                ? 'bg-primary/5 text-primary border-primary/20' 
+                : 'bg-slate-50 text-slate-400 border-slate-200'
+            }`}
+            title={isVoiceEnabled ? "Désactiver l'audio" : "Activer l'audio"}
+          >
+            {isVoiceEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
+            <span className="text-[9px] font-black uppercase tracking-[0.15em]">
+              {isVoiceEnabled ? "Lecture Active" : "Lecture Muette"}
+            </span>
+          </button>
         </div>
 
         <div className="space-y-4 max-w-xs mx-auto">
@@ -1632,6 +1794,24 @@ function MatchPage({
                   );
                 })}
               </div>
+
+              {pendingEndMatch && (
+                <div className="mt-8 pt-6 border-t border-slate-100">
+                  <button 
+                    onClick={() => onFinalizeMatch()}
+                    className="w-full bg-primary text-white py-5 rounded-2xl font-black uppercase tracking-widest shadow-lg shadow-primary/20 hover:scale-[1.01] active:scale-95 transition-all"
+                  >
+                    {scores.j1 === scores.j2 ? 'Confirmer le Match Nul' : 'Confirmer et Déclarer le Vainqueur'}
+                  </button>
+                  <div className="flex items-center justify-center gap-2 mt-4">
+                    <div className="h-[1px] flex-1 bg-slate-100" />
+                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
+                       {scores.j1 === scores.j2 ? 'Match Nul' : `Félicitations ${scores.j1 > scores.j2 ? currentMatch?.j1.name : currentMatch?.j2.name}`}
+                    </span>
+                    <div className="h-[1px] flex-1 bg-slate-100" />
+                  </div>
+                </div>
+              )}
             </motion.div>
           )}
         </AnimatePresence>
