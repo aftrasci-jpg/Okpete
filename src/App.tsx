@@ -27,17 +27,36 @@ import {
   Check,
   Edit3,
   Volume2,
-  VolumeX
+  VolumeX,
+  Lock,
+  Unlock,
+  AlertCircle,
+  Eye,
+  EyeOff
 } from 'lucide-react';
+
+// --- Utilities ---
+
+async function sha256(message: string) {
+  const msgBuffer = new TextEncoder().encode(message);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  return hashHex;
+}
+
+const APP_PASSWORD_HASH = '45159b15f36918503b7e43eac30d372adb9973f5af98709dbff8e1fe09fd771d';
 
 // --- Types ---
 
 type Role = 'Joueur' | 'Admin';
+type PlayerType = 'full' | 'better_only';
 
 interface Player {
   id: string;
   name: string;
   role: Role;
+  playerType?: PlayerType; // Defaults to 'full' for existing players
   active: boolean;
   wins: number;
   losses: number;
@@ -88,6 +107,14 @@ interface CountedOut {
 
 type View = 'players' | 'match' | 'ranking' | 'history';
 
+// --- Helpers ---
+
+const resolvePlayerName = (id: string, currentPlayers: Player[]) => {
+  if (!id) return "Inconnu";
+  if (id.startsWith('guest:')) return id.replace('guest:', '') + ' (Invité)';
+  return currentPlayers.find(p => p.id === id)?.name || 'Inconnu';
+};
+
 // --- Main App ---
 
 export default function App() {
@@ -95,6 +122,7 @@ export default function App() {
   const [players, setPlayers] = useState<Player[]>([]);
   
   const [nameInput, setNameInput] = useState('');
+  const [playerTypeInput, setPlayerTypeInput] = useState<PlayerType>('full');
   const [stake, setStake] = useState(1000);
 
   const [pointsInput, setPointsInput] = useState('');
@@ -125,9 +153,17 @@ export default function App() {
   const [isVoiceEnabled, setIsVoiceEnabled] = useState(true);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [isInstallable, setIsInstallable] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
 
   // Load from Local Storage on Mount
   useEffect(() => {
+    const savedAuth = localStorage.getItem('okpete-auth-v1');
+    if (savedAuth === 'true') {
+      setIsAuthenticated(true);
+    } else {
+      setIsAuthenticated(false);
+    }
+
     const savedPlayers = localStorage.getItem('okpete-players');
     const savedArchive = localStorage.getItem('okpete-archive');
     const savedSessions = localStorage.getItem('okpete-sessions');
@@ -150,6 +186,8 @@ export default function App() {
           const migration = parsed.map((p: any) => ({
             id: p.id || Math.random().toString(36).substr(2, 9),
             name: p.name || 'Joueur',
+            role: p.role || 'Joueur',
+            playerType: p.playerType || 'full',
             active: p.active ?? true,
             wins: p.wins ?? 0,
             losses: p.losses ?? 0,
@@ -214,6 +252,7 @@ export default function App() {
       id: Math.random().toString(36).substr(2, 9),
       name: nameInput.trim(),
       role: 'Joueur',
+      playerType: playerTypeInput,
       active: true,
       wins: 0,
       losses: 0,
@@ -223,6 +262,17 @@ export default function App() {
     
     setPlayers([...players, newPlayer]);
     setNameInput('');
+    setPlayerTypeInput('full');
+  };
+
+  const togglePlayerType = (id: string) => {
+    setPlayers(players.map(p => {
+      if (p.id === id) {
+        const nextType = p.playerType === 'better_only' ? 'full' : 'better_only';
+        return { ...p, playerType: nextType };
+      }
+      return p;
+    }));
   };
 
   const removePlayer = (id: string) => {
@@ -234,7 +284,7 @@ export default function App() {
   };
 
   const startTournament = (forceNew: boolean = false) => {
-    const active = players.filter(p => p.active);
+    const active = players.filter(p => p.active && p.playerType !== 'better_only');
     if (active.length < 2) {
       alert("Pas assez de joueurs actifs (minimum 2)");
       return;
@@ -550,7 +600,7 @@ export default function App() {
 
   const handleStartNext = () => {
     setShowNextPrompt(false);
-    const active = players.filter(p => p.active);
+    const active = players.filter(p => p.active && p.playerType !== 'better_only');
     if (active.length < 2) return;
 
     let p1: Player, p2: Player;
@@ -630,6 +680,15 @@ WORKFLOW COMPLET - O'KPÊTÊ (SCRABBLE & PARIS)
     setCopySuccess(true);
     setTimeout(() => setCopySuccess(false), 2000);
   };
+
+  if (isAuthenticated === null) return null;
+
+  if (!isAuthenticated) {
+    return <LockScreen onUnlock={() => {
+      setIsAuthenticated(true);
+      localStorage.setItem('okpete-auth-v1', 'true');
+    }} />;
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
@@ -724,7 +783,7 @@ WORKFLOW COMPLET - O'KPÊTÊ (SCRABBLE & PARIS)
                       }}
                       className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl py-3 px-4 font-bold text-slate-700 outline-none focus:border-primary transition-all"
                     >
-                      {players.filter(p => p.active).map(p => (
+                      {players.filter(p => p.active && p.playerType !== 'better_only').map(p => (
                         <option key={p.id} value={p.id}>{p.name}</option>
                       ))}
                     </select>
@@ -742,7 +801,7 @@ WORKFLOW COMPLET - O'KPÊTÊ (SCRABBLE & PARIS)
                       }}
                       className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl py-3 px-4 font-bold text-slate-700 outline-none focus:border-primary transition-all"
                     >
-                      {players.filter(p => p.active).map(p => (
+                      {players.filter(p => p.active && p.playerType !== 'better_only').map(p => (
                         <option key={p.id} value={p.id}>{p.name}</option>
                       ))}
                     </select>
@@ -800,55 +859,141 @@ WORKFLOW COMPLET - O'KPÊTÊ (SCRABBLE & PARIS)
                         <div className="space-y-1">
                           <label className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Parieur A</label>
                           <select 
-                            value={bet.betterAId}
+                            value={bet.betterAId.startsWith('guest:') ? 'guest' : bet.betterAId}
                             onChange={(e) => {
                               const newBets = [...pendingExternalBets];
-                              newBets[idx].betterAId = e.target.value;
+                              const val = e.target.value;
+                              const currentA = val === 'guest' ? 'guest:Invité A' : val;
+                              const currentB = newBets[idx].betterBId;
+                              
+                              newBets[idx].betterAId = currentA;
+                              
+                              // Force support logic
+                              const j1Id = pendingMatchDetails?.j1.id;
+                              const j2Id = pendingMatchDetails?.j2.id;
+                              if (currentA === j1Id || currentB === j2Id) {
+                                newBets[idx].betOnPlayerId = j1Id;
+                              } else if (currentA === j2Id || currentB === j1Id) {
+                                newBets[idx].betOnPlayerId = j2Id;
+                              }
+                              
                               setPendingExternalBets(newBets);
                             }}
                             className="w-full bg-white border border-slate-200 rounded-xl py-2 px-2 font-bold text-slate-700 text-[10px] outline-none"
                           >
-                            {players.filter(p => p.active).map(p => (
-                              <option key={p.id} value={p.id}>{p.name}</option>
-                            ))}
+                            <optgroup label="Joueurs">
+                              {players.filter(p => p.active).map(p => (
+                                <option key={p.id} value={p.id}>{p.name}</option>
+                              ))}
+                            </optgroup>
+                            <option value="guest">AUTRE (Invité)...</option>
                           </select>
+                          {bet.betterAId.startsWith('guest:') && (
+                            <input 
+                              type="text"
+                              value={bet.betterAId.replace('guest:', '')}
+                              onChange={(e) => {
+                                const newBets = [...pendingExternalBets];
+                                newBets[idx].betterAId = `guest:${e.target.value}`;
+                                setPendingExternalBets(newBets);
+                              }}
+                              placeholder="Nom de l'invité"
+                              className="w-full mt-1 bg-blue-50 border border-blue-100 rounded-lg py-1.5 px-2 font-bold text-slate-700 text-[10px] outline-none"
+                            />
+                          )}
                         </div>
                         <div className="space-y-1">
                           <label className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Parieur B</label>
                           <select 
-                            value={bet.betterBId}
+                            value={bet.betterBId.startsWith('guest:') ? 'guest' : bet.betterBId}
                             onChange={(e) => {
                               const newBets = [...pendingExternalBets];
-                              newBets[idx].betterBId = e.target.value;
+                              const val = e.target.value;
+                              const currentB = val === 'guest' ? 'guest:Invité B' : val;
+                              const currentA = newBets[idx].betterAId;
+                              
+                              newBets[idx].betterBId = currentB;
+                              
+                              // Force support logic
+                              const j1Id = pendingMatchDetails?.j1.id;
+                              const j2Id = pendingMatchDetails?.j2.id;
+                              if (currentA === j1Id || currentB === j2Id) {
+                                newBets[idx].betOnPlayerId = j1Id;
+                              } else if (currentA === j2Id || currentB === j1Id) {
+                                newBets[idx].betOnPlayerId = j2Id;
+                              }
+                              
                               setPendingExternalBets(newBets);
                             }}
                             className="w-full bg-white border border-slate-200 rounded-xl py-2 px-2 font-bold text-slate-700 text-[10px] outline-none"
                           >
-                            {players.filter(p => p.active).map(p => (
-                              <option key={p.id} value={p.id}>{p.name}</option>
-                            ))}
+                            <optgroup label="Joueurs">
+                              {players.filter(p => p.active).map(p => (
+                                <option key={p.id} value={p.id}>{p.name}</option>
+                              ))}
+                            </optgroup>
+                            <option value="guest">AUTRE (Invité)...</option>
                           </select>
+                          {bet.betterBId.startsWith('guest:') && (
+                            <input 
+                              type="text"
+                              value={bet.betterBId.replace('guest:', '')}
+                              onChange={(e) => {
+                                const newBets = [...pendingExternalBets];
+                                newBets[idx].betterBId = `guest:${e.target.value}`;
+                                setPendingExternalBets(newBets);
+                              }}
+                              placeholder="Nom de l'invité"
+                              className="w-full mt-1 bg-blue-50 border border-blue-100 rounded-lg py-1.5 px-2 font-bold text-slate-700 text-[10px] outline-none"
+                            />
+                          )}
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="space-y-1">
-                          <label className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Soutien</label>
-                          <select 
-                            value={bet.betOnPlayerId}
-                            onChange={(e) => {
-                              const newBets = [...pendingExternalBets];
-                              newBets[idx].betOnPlayerId = e.target.value;
-                              setPendingExternalBets(newBets);
-                            }}
-                            className="w-full bg-white border border-slate-200 rounded-xl py-2 px-2 font-bold text-slate-700 text-[10px] outline-none"
-                          >
-                            <option value={pendingMatchDetails?.j1.id}>{pendingMatchDetails?.j1.name} (J1)</option>
-                            <option value={pendingMatchDetails?.j2.id}>{pendingMatchDetails?.j2.name} (J2)</option>
-                          </select>
+                      <div className="grid grid-cols-1 gap-3">
+                        <div className="bg-white border border-slate-200 rounded-xl p-3 flex flex-col gap-2">
+                          <label className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Répartition du Duel</label>
+                          <div className="flex items-center gap-3">
+                            <div className="flex-1 space-y-1">
+                              <div className="text-[7px] font-black text-slate-400 uppercase">Soutien de A</div>
+                              {(() => {
+                                const j1Id = pendingMatchDetails?.j1.id;
+                                const j2Id = pendingMatchDetails?.j2.id;
+                                const aId = bet.betterAId;
+                                const bId = bet.betterBId;
+                                const isForced = aId === j1Id || aId === j2Id || bId === j1Id || bId === j2Id;
+                                
+                                return (
+                                  <select 
+                                    value={bet.betOnPlayerId}
+                                    disabled={isForced}
+                                    onChange={(e) => {
+                                      const newBets = [...pendingExternalBets];
+                                      newBets[idx].betOnPlayerId = e.target.value;
+                                      setPendingExternalBets(newBets);
+                                    }}
+                                    className={`w-full bg-slate-50 border border-slate-100 rounded-lg py-1.5 px-2 font-bold text-slate-700 text-[10px] outline-none ${isForced ? 'opacity-60 cursor-not-allowed border-dashed' : ''}`}
+                                  >
+                                    <option value={pendingMatchDetails?.j1.id}>{pendingMatchDetails?.j1.name} (J1)</option>
+                                    <option value={pendingMatchDetails?.j2.id}>{pendingMatchDetails?.j2.name} (J2)</option>
+                                  </select>
+                                );
+                              })()}
+                            </div>
+                            <div className="flex-shrink-0 pt-3">
+                              <ArrowRight className="w-3 h-3 text-slate-300" />
+                            </div>
+                            <div className="flex-1 space-y-1">
+                              <div className="text-[7px] font-black text-slate-400 uppercase">Soutien de B</div>
+                              <div className="w-full bg-slate-100 border border-dashed border-slate-200 rounded-lg py-1.5 px-2 font-bold text-slate-500 text-[10px] truncate">
+                                {bet.betOnPlayerId === pendingMatchDetails?.j1.id ? pendingMatchDetails?.j2.name : pendingMatchDetails?.j1.name}
+                              </div>
+                            </div>
+                          </div>
                         </div>
+
                         <div className="space-y-1">
-                          <label className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Mise Duel</label>
+                          <label className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Mise du Duel (FCFA)</label>
                           <input 
                             type="number"
                             value={bet.amount}
@@ -857,7 +1002,7 @@ WORKFLOW COMPLET - O'KPÊTÊ (SCRABBLE & PARIS)
                               newBets[idx].amount = Number(e.target.value);
                               setPendingExternalBets(newBets);
                             }}
-                            className="w-full bg-white border border-slate-200 rounded-xl py-2 px-2 font-bold text-slate-700 text-[10px] outline-none"
+                            className="w-full bg-white border border-slate-200 rounded-xl py-2 px-4 font-black text-slate-700 text-sm outline-none"
                           />
                         </div>
                       </div>
@@ -903,7 +1048,10 @@ WORKFLOW COMPLET - O'KPÊTÊ (SCRABBLE & PARIS)
               players={players}
               nameInput={nameInput}
               setNameInput={setNameInput}
+              playerTypeInput={playerTypeInput}
+              setPlayerTypeInput={setPlayerTypeInput}
               addPlayer={addPlayer}
+              togglePlayerType={togglePlayerType}
               togglePlayerActive={togglePlayerActive}
               removePlayer={removePlayer}
               startTournament={startTournament}
@@ -957,6 +1105,9 @@ WORKFLOW COMPLET - O'KPÊTÊ (SCRABBLE & PARIS)
                 }
                 setPendingEndMatch(null);
                 setShowAudit(false);
+              }}
+              onAddExternalBet={(bet) => {
+                setCurrentExternalBets(prev => [bet, ...prev]);
               }}
             />
           )}
@@ -1163,6 +1314,104 @@ WORKFLOW COMPLET - O'KPÊTÊ (SCRABBLE & PARIS)
 
 // --- Sub-Components ---
 
+function LockScreen({ onUnlock }: { onUnlock: () => void }) {
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(false);
+
+    const hash = await sha256(password.trim());
+    if (hash === APP_PASSWORD_HASH) {
+      onUnlock();
+    } else {
+      setError(true);
+      setPassword('');
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4 relative overflow-hidden">
+      {/* Background Decor */}
+      <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none opacity-20">
+        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-primary rounded-full blur-[120px]" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-600 rounded-full blur-[120px]" />
+      </div>
+
+      <motion.div 
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="w-full max-w-sm bg-white/10 backdrop-blur-xl border border-white/20 p-8 rounded-[40px] shadow-2xl relative z-10"
+      >
+        <div className="flex flex-col items-center text-center space-y-6">
+          <div className="w-20 h-20 bg-primary/20 rounded-[24px] flex items-center justify-center text-primary shadow-inner">
+            <Lock className="w-10 h-10" />
+          </div>
+          
+          <div className="space-y-2">
+            <h1 className="text-3xl font-display font-black text-white tracking-tight">Accès Sécurisé</h1>
+            <p className="text-sm text-white/50 font-medium">Entrez votre mot de passe pour accéder à O'Kpêtê</p>
+          </div>
+
+          <form onSubmit={handleSubmit} className="w-full space-y-4">
+            <div className="relative">
+              <input 
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Mot de passe"
+                autoFocus
+                className={`w-full bg-white/5 border-2 ${error ? 'border-red-500/50 focus:border-red-500' : 'border-white/10 focus:border-primary'} rounded-2xl py-4 px-6 pr-12 text-white placeholder:text-white/20 outline-none transition-all font-bold text-center tracking-wider`}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-4 top-1/2 -translate-y-1/2 text-white/40 hover:text-white transition-colors"
+              >
+                {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+              </button>
+              {error && (
+                <motion.div 
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  className="absolute -bottom-6 left-0 right-0 flex items-center justify-center gap-1.5 text-red-400"
+                >
+                  <AlertCircle className="w-3.5 h-3.5" />
+                  <span className="text-[10px] font-black uppercase tracking-widest">Mot de passe incorrect</span>
+                </motion.div>
+              )}
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading || !password}
+              className="w-full bg-primary text-white py-4 rounded-2xl font-black uppercase tracking-[0.2em] shadow-lg shadow-primary/20 hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2 group disabled:opacity-50 disabled:grayscale"
+            >
+              {loading ? (
+                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              ) : (
+                <>
+                  Valider
+                  <Unlock className="w-4 h-4 text-white/50 group-hover:text-white transition-colors" />
+                </>
+              )}
+            </button>
+          </form>
+        </div>
+      </motion.div>
+      
+      <div className="absolute bottom-10 left-0 right-0 text-center">
+        <p className="text-[10px] font-black uppercase tracking-[0.3em] text-white/20">Système de gestion O'Kpêtê</p>
+      </div>
+    </div>
+  );
+}
+
 function NavButton({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string }) {
   return (
     <button 
@@ -1190,7 +1439,7 @@ const pageTransition = {
 
 // 1. Players Module
 function PlayersPage({ 
-  players, nameInput, setNameInput, addPlayer, togglePlayerActive, removePlayer, startTournament, stake, setStake, currentKingId,
+  players, nameInput, setNameInput, playerTypeInput, setPlayerTypeInput, addPlayer, togglePlayerType, togglePlayerActive, removePlayer, startTournament, stake, setStake, currentKingId,
   isInstallable, handleInstallApp, archive
 }: any) {
   const hasCurrentSessionData = archive.length > 0 || players.some((p: any) => p.earnings !== 0);
@@ -1222,21 +1471,38 @@ function PlayersPage({
           <h2 className="text-xl font-display">Gestion des Joueurs</h2>
         </div>
         
-        <div className="flex flex-col sm:flex-row gap-2 mb-6">
-          <input 
-            value={nameInput}
-            onChange={(e) => setNameInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && addPlayer()}
-            placeholder="Nom du joueur..."
-            className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-primary/20 transition-all font-black text-slate-800 text-sm sm:text-base"
-          />
-          <button 
-            onClick={addPlayer}
-            className="bg-primary text-white py-3 px-6 sm:px-4 rounded-xl shadow-lg shadow-primary/20 hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-2 shrink-0"
-          >
-            <Plus className="w-5 h-5 sm:w-6 sm:h-6" />
-            <span className="sm:hidden font-black uppercase text-xs tracking-widest">Ajouter un joueur</span>
-          </button>
+        <div className="space-y-3 mb-6">
+          <div className="flex flex-col sm:flex-row gap-2">
+            <input 
+              value={nameInput}
+              onChange={(e) => setNameInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && addPlayer()}
+              placeholder="Nom du parieur/joueur..."
+              className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-primary/20 transition-all font-black text-slate-800 text-sm sm:text-base"
+            />
+            <button 
+              onClick={addPlayer}
+              className="bg-primary text-white py-3 px-6 sm:px-4 rounded-xl shadow-lg shadow-primary/20 hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-2 shrink-0"
+            >
+              <Plus className="w-5 h-5 sm:w-6 sm:h-6" />
+              <span className="sm:hidden font-black uppercase text-xs tracking-widest">Enregistrer</span>
+            </button>
+          </div>
+          
+          <div className="flex items-center gap-4 bg-slate-50 p-1.5 rounded-xl border border-slate-100">
+            <button 
+              onClick={() => setPlayerTypeInput('full')}
+              className={`flex-1 py-1.5 px-3 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${playerTypeInput === 'full' ? 'bg-white text-primary shadow-sm ring-1 ring-slate-200' : 'text-slate-400 hover:text-slate-600'}`}
+            >
+              Joueur (+Paris)
+            </button>
+            <button 
+              onClick={() => setPlayerTypeInput('better_only')}
+              className={`flex-1 py-1.5 px-3 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${playerTypeInput === 'better_only' ? 'bg-white text-primary shadow-sm ring-1 ring-slate-200' : 'text-slate-400 hover:text-slate-600'}`}
+            >
+              Parieur Seul
+            </button>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-8 max-h-[60vh] overflow-y-auto pr-1">
@@ -1253,14 +1519,26 @@ function PlayersPage({
                     {(p.name || '').substring(0, 2).toUpperCase()}
                   </div>
                   <div>
-                    <div className="text-xs font-black text-slate-800 flex items-center gap-2">
+                    <div className="text-xs font-black text-slate-800 flex items-center gap-1">
                        {p.name || 'Sans nom'}
                        {currentKingId === p.id && <span className="text-[10px]">👑</span>}
+                    </div>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <span className={`text-[7px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-full border ${p.playerType === 'better_only' ? 'bg-amber-50 text-amber-600 border-amber-100' : 'bg-blue-50 text-blue-600 border-blue-100'}`}>
+                        {p.playerType === 'better_only' ? 'Parieur' : 'Joueur'}
+                      </span>
                     </div>
                   </div>
                 </div>
                 
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button 
+                    onClick={() => togglePlayerType(p.id)}
+                    className={`p-1.5 rounded-lg border transition-all ${p.playerType === 'better_only' ? 'bg-blue-50 text-blue-600 border-blue-100 hover:bg-blue-100' : 'bg-amber-50 text-amber-600 border-amber-100 hover:bg-amber-100'}`}
+                    title={p.playerType === 'better_only' ? 'Transformer en Joueur' : 'Passer en Parieur seul'}
+                  >
+                    {p.playerType === 'better_only' ? <UserCheck className="w-4 h-4" /> : <UserMinus className="w-4 h-4" />}
+                  </button>
                   <button onClick={() => togglePlayerActive(p.id)} className={`p-1.5 rounded-lg transition-all ${p.active ? 'bg-slate-50 text-slate-400 border border-slate-100' : 'bg-green-50 text-green-600 border border-green-200'}`}>
                     {p.active ? <UserMinus className="w-4 h-4" /> : <UserCheck className="w-4 h-4" />}
                   </button>
@@ -1356,16 +1634,25 @@ interface MatchPageProps {
   setIsVoiceEnabled: (val: boolean) => void;
   pendingEndMatch: { winner: Player; loser: Player; scores: { j1: number; j2: number } } | null;
   onFinalizeMatch: () => void;
+  onAddExternalBet: (bet: ExternalBet) => void;
 }
 
 // 2. Match Module
 function MatchPage({ 
   currentMatch, scores, pointsInput, setPointsInput, submitPoints, currentTurn, matchMoves, updateMove, deleteMove, countedOut, endMatchEarly, showNextPrompt, handleStartNext,
   showReplayPrompt, replayMatch, endAsDraw, lastDrawScores, currentMatchStake, setCurrentMatchStake, showAudit, setShowAudit, currentKingId, currentExternalBets, players,
-  isVoiceEnabled, setIsVoiceEnabled, pendingEndMatch, onFinalizeMatch
+  isVoiceEnabled, setIsVoiceEnabled, pendingEndMatch, onFinalizeMatch, onAddExternalBet
 }: MatchPageProps) {
   const [isEditingStake, setIsEditingStake] = useState(false);
   const [newStakeInput, setNewStakeInput] = useState(currentMatchStake.toString());
+  const [showAddBetForm, setShowAddBetForm] = useState(false);
+  const [newBet, setNewBet] = useState<ExternalBet>({
+    id: Date.now().toString(),
+    betterAId: players.filter(p => p.active)[0]?.id || '',
+    betterBId: players.filter(p => p.active)[1]?.id || '',
+    betOnPlayerId: currentMatch?.j1.id || '',
+    amount: 1000
+  });
 
   // Text-to-speech for the lead message and alerts
   useEffect(() => {
@@ -1720,38 +2007,225 @@ function MatchPage({
         </div>
 
         {/* Display Active External Bets */}
-        {currentExternalBets.length > 0 && (
-          <div className="mt-8 pt-6 border-t border-slate-100">
-            <div className="flex items-center gap-2 mb-3">
+        <div className="mt-8 pt-6 border-t border-slate-100">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
               <Sword className="w-3 h-3 text-orange-500" />
-              <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Paris Extérieurs Actifs</h4>
+              <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Paris Extérieurs</h4>
             </div>
-            <div className="grid grid-cols-1 gap-2">
-              {currentExternalBets.map(bet => {
-                const bA = players.find(p => p.id === bet.betterAId);
-                const bB = players.find(p => p.id === bet.betterBId);
+            <button 
+              onClick={() => {
+                setShowAddBetForm(!showAddBetForm);
+                setNewBet({
+                  id: Date.now().toString(),
+                  betterAId: players.filter(p => p.active)[0]?.id || '',
+                  betterBId: players.filter(p => p.active)[1]?.id || '',
+                  betOnPlayerId: currentMatch?.j1.id || '',
+                  amount: 1000
+                });
+              }}
+              className="text-[9px] font-black text-primary uppercase tracking-widest bg-primary/5 px-2 py-1 rounded-lg flex items-center gap-1 active:scale-95 transition-all"
+            >
+              <Plus className="w-2.5 h-2.5" />
+              {showAddBetForm ? 'Annuler' : 'Ajouter un pari'}
+            </button>
+          </div>
+
+          <AnimatePresence>
+            {showAddBetForm && (
+              <motion.div 
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                className="overflow-hidden mb-4"
+              >
+                <div className="bg-blue-50/50 border border-blue-100 rounded-2xl p-4 space-y-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Parieur A</label>
+                      <select 
+                        value={newBet.betterAId.startsWith('guest:') ? 'guest' : newBet.betterAId}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          const currentA = val === 'guest' ? 'guest:Invité A' : val;
+                          const currentB = newBet.betterBId;
+                          let nextBetOn = newBet.betOnPlayerId;
+                          
+                          // Force support logic
+                          const j1Id = currentMatch?.j1.id;
+                          const j2Id = currentMatch?.j2.id;
+                          if (currentA === j1Id || currentB === j2Id) {
+                            nextBetOn = j1Id || '';
+                          } else if (currentA === j2Id || currentB === j1Id) {
+                            nextBetOn = j2Id || '';
+                          }
+                          
+                          setNewBet(prev => ({
+                            ...prev,
+                            betterAId: currentA,
+                            betOnPlayerId: nextBetOn
+                          }));
+                        }}
+                        className="w-full bg-white border border-slate-200 rounded-xl py-2 px-2 font-bold text-slate-700 text-[10px] outline-none"
+                      >
+                        <optgroup label="Joueurs">
+                          {players.filter(p => p.active).map(p => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                        </optgroup>
+                        <option value="guest">AUTRE (Invité)...</option>
+                      </select>
+                      {newBet.betterAId.startsWith('guest:') && (
+                        <input 
+                          type="text"
+                          value={newBet.betterAId.replace('guest:', '')}
+                          onChange={(e) => setNewBet(prev => ({ ...prev, betterAId: `guest:${e.target.value}` }))}
+                          placeholder="Nom de l'invité"
+                          className="w-full mt-1 bg-white border border-slate-200 rounded-lg py-1.5 px-2 font-bold text-slate-700 text-[10px] outline-none"
+                        />
+                      )}
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Parieur B</label>
+                      <select 
+                        value={newBet.betterBId.startsWith('guest:') ? 'guest' : newBet.betterBId}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          const currentB = val === 'guest' ? 'guest:Invité B' : val;
+                          const currentA = newBet.betterAId;
+                          let nextBetOn = newBet.betOnPlayerId;
+                          
+                          // Force support logic
+                          const j1Id = currentMatch?.j1.id;
+                          const j2Id = currentMatch?.j2.id;
+                          if (currentA === j1Id || currentB === j2Id) {
+                            nextBetOn = j1Id || '';
+                          } else if (currentA === j2Id || currentB === j1Id) {
+                            nextBetOn = j2Id || '';
+                          }
+                          
+                          setNewBet(prev => ({
+                            ...prev,
+                            betterBId: currentB,
+                            betOnPlayerId: nextBetOn
+                          }));
+                        }}
+                        className="w-full bg-white border border-slate-200 rounded-xl py-2 px-2 font-bold text-slate-700 text-[10px] outline-none"
+                      >
+                        <optgroup label="Joueurs">
+                          {players.filter(p => p.active).map(p => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                        </optgroup>
+                        <option value="guest">AUTRE (Invité)...</option>
+                      </select>
+                      {newBet.betterBId.startsWith('guest:') && (
+                        <input 
+                          type="text"
+                          value={newBet.betterBId.replace('guest:', '')}
+                          onChange={(e) => setNewBet(prev => ({ ...prev, betterBId: `guest:${e.target.value}` }))}
+                          placeholder="Nom de l'invité"
+                          className="w-full mt-1 bg-white border border-slate-200 rounded-lg py-1.5 px-2 font-bold text-slate-700 text-[10px] outline-none"
+                        />
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="bg-white border border-slate-200 rounded-xl p-3 flex flex-col gap-2">
+                      <label className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Répartition du Duel</label>
+                      <div className="flex items-center gap-3">
+                        <div className="flex-1 space-y-1">
+                          <div className="text-[7px] font-black text-slate-400 uppercase">Soutien de A</div>
+                          {(() => {
+                            const j1Id = currentMatch?.j1.id;
+                            const j2Id = currentMatch?.j2.id;
+                            const aId = newBet.betterAId;
+                            const bId = newBet.betterBId;
+                            const isForced = aId === j1Id || aId === j2Id || bId === j1Id || bId === j2Id;
+
+                            return (
+                              <select 
+                                value={newBet.betOnPlayerId}
+                                disabled={isForced}
+                                onChange={(e) => setNewBet(prev => ({ ...prev, betOnPlayerId: e.target.value }))}
+                                className={`w-full bg-slate-50 border border-slate-100 rounded-lg py-1.5 px-2 font-bold text-slate-700 text-[10px] outline-none ${isForced ? 'opacity-60 cursor-not-allowed border-dashed' : ''}`}
+                              >
+                                {currentMatch && (
+                                  <>
+                                    <option value={currentMatch.j1.id}>{currentMatch.j1.name} (J1)</option>
+                                    <option value={currentMatch.j2.id}>{currentMatch.j2.name} (J2)</option>
+                                  </>
+                                )}
+                              </select>
+                            );
+                          })()}
+                        </div>
+                        <div className="flex-shrink-0 pt-3">
+                          <ArrowRight className="w-3 h-3 text-slate-300" />
+                        </div>
+                        <div className="flex-1 space-y-1">
+                          <div className="text-[7px] font-black text-slate-400 uppercase">Soutien de B</div>
+                          <div className="w-full bg-slate-100 border border-dashed border-slate-200 rounded-lg py-1.5 px-2 font-bold text-slate-500 text-[10px] truncate">
+                            {currentMatch && (newBet.betOnPlayerId === currentMatch.j1.id ? currentMatch.j2.name : currentMatch.j1.name)}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Montant (FCFA)</label>
+                      <input 
+                        type="number"
+                        value={newBet.amount}
+                        onChange={(e) => setNewBet(prev => ({ ...prev, amount: parseInt(e.target.value) || 0 }))}
+                        className="w-full bg-white border border-slate-200 rounded-xl py-2 px-4 font-black text-slate-700 text-sm outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <button 
+                    onClick={() => {
+                      onAddExternalBet(newBet);
+                      setShowAddBetForm(false);
+                    }}
+                    className="w-full bg-primary text-white py-2.5 rounded-xl font-black uppercase tracking-widest text-[10px] shadow-md shadow-primary/20 active:scale-95 transition-all"
+                  >
+                    Confirmer le pari
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <div className="grid grid-cols-1 gap-2">
+            {currentExternalBets.map(bet => {
+                const bAName = resolvePlayerName(bet.betterAId, players);
+                const bBName = resolvePlayerName(bet.betterBId, players);
                 const supported = players.find(p => p.id === bet.betOnPlayerId);
+                const oppositeId = currentMatch?.j1.id === bet.betOnPlayerId ? currentMatch?.j2.id : currentMatch?.j1.id;
+                const opposite = players.find(p => p.id === oppositeId);
                 
                 return (
                   <div key={bet.id} className="bg-slate-50 rounded-xl p-3 border border-slate-100 space-y-2">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-1.5">
-                        <span className="text-xs font-black text-slate-700">{bA?.name}</span>
+                        <span className="text-xs font-black text-slate-700">{bAName}</span>
                         <span className="text-[8px] font-black text-slate-300 uppercase">VS</span>
-                        <span className="text-xs font-black text-slate-700">{bB?.name}</span>
+                        <span className="text-xs font-black text-slate-700">{bBName}</span>
                       </div>
                       <div className="text-[10px] font-black text-primary">{bet.amount.toLocaleString()} FCFA</div>
                     </div>
-                    <div className="text-[9px] font-black uppercase tracking-widest pt-1 border-t border-slate-200/50">
-                       {bA?.name} soutient {supported?.name}
+                    <div className="flex items-center justify-between text-[8px] font-black uppercase tracking-widest pt-1 border-t border-slate-200/50">
+                       <span className="text-slate-400">{bAName} : <span className="text-primary">{supported?.name}</span></span>
+                       <span className="text-slate-400">{bBName} : <span className="text-primary">{opposite?.name}</span></span>
                     </div>
                   </div>
                 );
               })}
             </div>
           </div>
-        )}
-      </section>
+        </section>
 
       {/* Match History (Moves) */}
       <section className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
@@ -1953,6 +2427,7 @@ function RankingPage({ players, rankingSearch, setRankingSearch }: { players: Pl
               <div className="flex-1 min-w-0">
                 <div className="font-bold text-slate-900 text-lg truncate flex items-center gap-2">
                   {p.name}
+                  {p.playerType === 'better_only' && <span className="text-[7px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-full border bg-amber-50 text-amber-600 border-amber-100">Parieur</span>}
                   {i === 0 && p.earnings > 0 && !rankingSearch && <span className="inline-block w-2 h-2 bg-green-500 rounded-full animate-pulse" />}
                 </div>
                 <div className="flex items-center gap-3 text-[10px] font-black text-slate-400 uppercase tracking-widest">
@@ -1993,10 +2468,8 @@ function HistoryPage({ archive, sessions, onDeleteSession, players }: any) {
           <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Paris duels</span>
         </div>
         {bets.map((bet) => {
-          const bA = currentPlayers.find(p => p.id === bet.betterAId);
-          const bB = currentPlayers.find(p => p.id === bet.betterBId);
-          const bAName = bA?.name || "??";
-          const bBName = bB?.name || "??";
+          const bAName = resolvePlayerName(bet.betterAId, currentPlayers);
+          const bBName = resolvePlayerName(bet.betterBId, currentPlayers);
           
           let status = "";
           if (winnerId === 'draw') {
@@ -2009,9 +2482,9 @@ function HistoryPage({ archive, sessions, onDeleteSession, players }: any) {
           return (
             <div key={bet.id} className="flex items-center justify-between text-[9px] font-bold">
               <div className="flex items-center gap-1">
-                <span className="text-slate-600 truncate max-w-[60px]">{bAName}</span>
+                <span className="text-slate-600 truncate max-w-[80px]">{bAName}</span>
                 <span className="text-slate-300 italic">vs</span>
-                <span className="text-slate-600 truncate max-w-[60px]">{bBName}</span>
+                <span className="text-slate-600 truncate max-w-[80px]">{bBName}</span>
                 <span className="text-[7px] text-primary/60 ml-1">({status})</span>
               </div>
               <div className="text-primary">{bet.amount} <span className="text-[7px] text-slate-300">FCFA</span></div>
@@ -2130,7 +2603,12 @@ function HistoryPage({ archive, sessions, onDeleteSession, players }: any) {
                     <div key={p.id} className="flex items-center justify-between py-2 border-b border-slate-50 last:border-0 text-sm">
                       <div className="flex items-center gap-3">
                         <span className="w-4 text-slate-300 font-black">{i+1}</span>
-                        <span className="font-bold text-slate-700">{p.name}</span>
+                        <div>
+                          <div className="font-bold text-slate-700 flex items-center gap-1.5">
+                            {p.name}
+                            {p.playerType === 'better_only' && <span className="text-[6px] font-black uppercase tracking-widest px-1 py-0.5 rounded-full bg-amber-50 text-amber-600">Parieur</span>}
+                          </div>
+                        </div>
                       </div>
                       <span className={`font-black ${(p.earnings ?? 0) >= 0 ? 'text-primary' : 'text-red-500'}`}>
                         {(p.earnings ?? 0) > 0 ? '+' : ''}{(p.earnings ?? 0).toLocaleString()}
