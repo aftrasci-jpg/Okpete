@@ -328,15 +328,8 @@ export default function App() {
     setSessions([newSession, ...sessions]);
     setArchive([]);
     
-    // Reset all player stats but keep the players list
-    const resetPlayers = players.map(p => ({
-      ...p,
-      wins: 0,
-      losses: 0,
-      earnings: 0
-    }));
-    
-    setPlayers(resetPlayers);
+    // Reset players list for the new session as requested
+    setPlayers([]);
     setCurrentIndex(0);
     setCurrentKingId(null);
     setCurrentMatch(null);
